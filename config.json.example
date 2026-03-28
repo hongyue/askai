@@ -1,0 +1,37 @@
+{
+  "provider": "llama",
+  "providers": {
+    "llama": {
+      "api_key": "llama",
+      "model": "HauhanCS/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-Q6_K",
+      "base_url": "http://172.17.0.21:8080/v1"
+    },
+    "openai": {
+      "api_key": "sk-your-openai-key",
+      "model": "gpt-4o",
+      "base_url": "https://api.openai.com/v1"
+    },
+    "anthropic": {
+      "api_key": "sk-ant-your-anthropic-key",
+      "model": "claude-sonnet-4-20250514"
+    },
+    "ollama": {
+      "api_key": "ollama",
+      "model": "llama3",
+      "base_url": "http://localhost:11434/v1"
+    }
+  },
+  "mcp": {
+    "autoExecute": false
+  },
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"],
+      "autoExecute": true
+    },
+    "web-search": {
+      "url": "http://localhost:3000/mcp"
+    }
+  }
+}
