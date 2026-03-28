@@ -1,7 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
+import type { Beta } from '@anthropic-ai/sdk/resources/index';
 import { ProviderConfig } from '../config';
 import { Message, StreamChunk, Provider, ToolCall } from './base';
 import { AnthropicTool } from '../mcp/tools';
+
+type AnthropicToolsMessageParam = Beta.Tools.ToolsBetaMessageParam;
+type AnthropicToolUseBlock = Beta.Tools.ToolUseBlock;
 
 export class AnthropicProvider implements Provider {
   readonly name: string;
@@ -17,88 +21,39 @@ export class AnthropicProvider implements Provider {
   }
   
   async *chat(messages: Message[], tools?: AnthropicTool[]): AsyncGenerator<StreamChunk, void, unknown> {
+    if (tools && tools.length > 0) {
+      const response = await this.chatComplete(messages, tools);
+      yield {
+        content: response.content,
+        done: true,
+        tool_calls: response.tool_calls,
+      };
+      return;
+    }
+
     try {
-      // Separate system message from other messages
       const systemMessage = messages.find(m => m.role === 'system');
       const chatMessages = messages
-        .filter(m => m.role !== 'system')
-        .map(m => {
-          if (m.role === 'tool') {
-            return {
-              role: 'user' as const,
-              content: [
-                {
-                  type: 'tool_result' as const,
-                  tool_use_id: m.tool_call_id || '',
-                  content: m.content,
-                },
-              ],
-            };
-          }
-          
-          if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
-            const content: any[] = [];
-            if (m.content) {
-              content.push({ type: 'text', text: m.content });
-            }
-            for (const tc of m.tool_calls) {
-              content.push({
-                type: 'tool_use',
-                id: tc.id,
-                name: tc.name,
-                input: JSON.parse(tc.arguments || '{}'),
-              });
-            }
-            return { role: 'assistant' as const, content };
-          }
-          
-          return { role: m.role as 'user' | 'assistant', content: m.content };
-        });
-      
-      const params: any = {
+        .filter((m): m is Message & { role: 'user' | 'assistant' } => m.role === 'user' || m.role === 'assistant')
+        .map(m => ({ role: m.role, content: m.content }));
+
+      const params: Anthropic.MessageStreamParams = {
         model: this.model,
         max_tokens: 4096,
         system: systemMessage?.content || '',
         messages: chatMessages,
       };
-
-      if (tools && tools.length > 0) {
-        params.tools = tools;
-      }
-      
       const stream = this.client.messages.stream(params);
-      
-      let toolCalls: ToolCall[] = [];
-      let currentToolCall: Partial<ToolCall> | null = null;
-      
+
       for await (const event of stream) {
-        if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
-          currentToolCall = {
-            id: event.content_block.id,
-            name: event.content_block.name,
-            arguments: '',
-          };
-        }
-        
         if (event.type === 'content_block_delta') {
           if (event.delta.type === 'text_delta') {
             yield { content: event.delta.text, done: false };
-          } else if (event.delta.type === 'input_json_delta' && currentToolCall) {
-            currentToolCall.arguments = (currentToolCall.arguments || '') + event.delta.partial_json;
           }
         }
-        
-        if (event.type === 'content_block_stop' && currentToolCall) {
-          toolCalls.push(currentToolCall as ToolCall);
-          currentToolCall = null;
-        }
-        
+
         if (event.type === 'message_stop') {
-          yield { 
-            content: '', 
-            done: true,
-            tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-          };
+          yield { content: '', done: true };
           return;
         }
       }
@@ -112,26 +67,25 @@ export class AnthropicProvider implements Provider {
   
   async chatComplete(messages: Message[], tools?: AnthropicTool[]): Promise<Message> {
     try {
-      // Separate system message from other messages
       const systemMessage = messages.find(m => m.role === 'system');
       const chatMessages = messages
         .filter(m => m.role !== 'system')
-        .map(m => {
+        .map<AnthropicToolsMessageParam>(m => {
           if (m.role === 'tool') {
             return {
-              role: 'user' as const,
+              role: 'user',
               content: [
                 {
-                  type: 'tool_result' as const,
+                  type: 'tool_result',
                   tool_use_id: m.tool_call_id || '',
-                  content: m.content,
+                  content: [{ type: 'text', text: m.content }],
                 },
               ],
             };
           }
-          
+
           if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
-            const content: any[] = [];
+            const content: Array<{ type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: unknown }> = [];
             if (m.content) {
               content.push({ type: 'text', text: m.content });
             }
@@ -143,24 +97,31 @@ export class AnthropicProvider implements Provider {
                 input: JSON.parse(tc.arguments || '{}'),
               });
             }
-            return { role: 'assistant' as const, content };
+            return { role: 'assistant', content };
           }
-          
-          return { role: m.role as 'user' | 'assistant', content: m.content };
-        });
-      
-      const params: any = {
-        model: this.model,
-        max_tokens: 4096,
-        system: systemMessage?.content || '',
-        messages: chatMessages,
-      };
 
-      if (tools && tools.length > 0) {
-        params.tools = tools;
-      }
-      
-      const response = await this.client.messages.create(params);
+          return {
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+          };
+        });
+
+      const response = tools && tools.length > 0
+        ? await this.client.beta.tools.messages.create({
+            model: this.model,
+            max_tokens: 4096,
+            system: systemMessage?.content || '',
+            messages: chatMessages,
+            tools,
+          })
+        : await this.client.messages.create({
+            model: this.model,
+            max_tokens: 4096,
+            system: systemMessage?.content || '',
+            messages: chatMessages.filter(
+              (m): m is Anthropic.MessageParam => typeof m.content === 'string'
+            ),
+          });
       
       const result: Message = {
         role: 'assistant',
@@ -173,11 +134,12 @@ export class AnthropicProvider implements Provider {
       for (const block of response.content) {
         if (block.type === 'text') {
           textParts.push(block.text);
-        } else if (block.type === 'tool_use') {
+        } else if ('name' in block && 'id' in block && 'input' in block) {
+          const toolBlock = block as AnthropicToolUseBlock;
           toolCalls.push({
-            id: block.id,
-            name: block.name,
-            arguments: JSON.stringify(block.input),
+            id: toolBlock.id,
+            name: toolBlock.name,
+            arguments: JSON.stringify(toolBlock.input),
           });
         }
       }

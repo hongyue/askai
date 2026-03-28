@@ -10,7 +10,7 @@ program
   .version('0.1.0');
 
 program
-  .arguments('[question...]', 'Question to ask (oneshot mode)')
+  .argument('[question...]', 'Question to ask (oneshot mode)')
   .option('-p, --provider <name>', 'Override provider')
   .option('-m, --model <name>', 'Override model')
   .option('-c, --config <path>', 'Config file path')

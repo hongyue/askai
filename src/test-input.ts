@@ -18,7 +18,6 @@ async function main() {
   const input = Input({
     id: 'test-input',
     width: '100%',
-    height: 3,
     placeholder: 'Type here and press Enter...',
     textColor: '#ffffff',
     cursorColor: '#00ff00',

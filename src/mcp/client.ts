@@ -29,7 +29,7 @@ export class MCPClientWrapper {
     this.serverName = serverName;
     this.client = new Client(
       { name: 'askai-client', version: '0.1.0' },
-      { capabilities: { tools: {} } }
+      { capabilities: {} }
     );
   }
 
@@ -88,7 +88,7 @@ export class MCPClientWrapper {
     const result = await this.client.callTool({ name, arguments: args });
     return {
       content: result.content as MCPToolResult['content'],
-      isError: result.isError,
+      isError: typeof result.isError === 'boolean' ? result.isError : undefined,
     };
   }
 }
