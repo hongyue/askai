@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { createDefaultConfig, loadConfig } from './config';
-import { runOpenTUIApp } from './opentui-app';
+import { runOneShotApp, runOpenTUIApp } from './app';
 
 export const program = new Command();
 
@@ -14,9 +14,9 @@ program
   .option('-p, --provider <name>', 'Override provider')
   .option('-m, --model <name>', 'Override model')
   .option('-c, --config <path>', 'Config file path')
-  .option('--execute <mode>', 'Set shell command execution: on or off')
-  .option('--mcp <mode>', 'Set MCP servers: on or off')
-  .option('--init', 'Create a default config file')
+  .option('-e, --execute <mode>', 'Set shell command execution: on or off')
+  .option('-x, --mcp <mode>', 'Set MCP servers: on or off')
+  .option('-i, --init', 'Create a default config file')
   .action(async (question: string[] | undefined, options) => {
     if (options.init) {
       try {
@@ -53,14 +53,24 @@ program
           throw new Error('Invalid value for --mcp. Use "on" or "off".');
         }
       }
-      await runOpenTUIApp({
-        providerName: options.provider,
-        modelName: options.model,
-        configPath: options.config,
-        allowExecute,
-        mcpEnabled,
-        question: questionText,
-      });
+      if (questionText) {
+        await runOneShotApp({
+          providerName: options.provider,
+          modelName: options.model,
+          configPath: options.config,
+          allowExecute,
+          mcpEnabled,
+          question: questionText,
+        });
+      } else {
+        await runOpenTUIApp({
+          providerName: options.provider,
+          modelName: options.model,
+          configPath: options.config,
+          allowExecute,
+          mcpEnabled,
+        });
+      }
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       process.exit(1);

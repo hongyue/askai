@@ -7,11 +7,13 @@ import { createProviderFromConfig } from './providers';
 import { MCPTool } from './mcp/client';
 import { convertToOpenAITools, convertToAnthropicTools } from './mcp/tools';
 import {
+  askForExecution,
   detectCodeBlocks,
   executeCommand as executeShellCommand,
   formatCommandBlock,
   formatCommandResult,
   type CommandBlock,
+  type ExecutionDecision,
 } from './shell';
 
 interface MutableTextNode {
@@ -43,33 +45,62 @@ interface PaletteState {
 interface PendingExecution {
   blocks: CommandBlock[];
   index: number;
+  mode: 'ask' | 'allow-all' | 'reject-all';
 }
 
-export async function runOpenTUIApp(options: {
+interface RunAppOptions {
   providerName?: string;
   modelName?: string;
   configPath?: string;
   allowExecute: boolean;
   mcpEnabled: boolean;
   question?: string;
-}): Promise<void> {
+}
+
+const oneShotFeedbackPrompts = [
+  'Thinking...',
+  'Working on it...',
+  'Checking...',
+  'Putting it together...',
+  'One moment...',
+];
+
+const oneShotFeedbackColor = '\x1b[38;5;45m';
+const ansiReset = '\x1b[0m';
+
+function getRandomOneShotFeedbackPrompt(): string {
+  const index = Math.floor(Math.random() * oneShotFeedbackPrompts.length);
+  return oneShotFeedbackPrompts[index];
+}
+
+async function initializeRuntime(options: RunAppOptions): Promise<{
+  config: Awaited<ReturnType<typeof loadConfig>>;
+  mcpManager: MCPManager | undefined;
+  mcpTools: MCPTool[];
+  provider: Awaited<ReturnType<typeof createProviderFromConfig>>;
+  systemPrompt: string;
+  state: ReturnType<typeof createInitialState>;
+  getProviderTools: () => any[];
+  refreshProviderTools: () => void;
+  messages: Message[];
+}> {
   const config = await loadConfig(options.configPath);
   if (options.providerName) config.provider = options.providerName;
   if (options.modelName) config.providers[config.provider].model = options.modelName;
-  
+
   let mcpManager: MCPManager | undefined;
   let mcpTools: MCPTool[] = [];
-  
+
   if (options.mcpEnabled && config.mcpServers && Object.keys(config.mcpServers).length > 0) {
     mcpManager = new MCPManager(config);
     await mcpManager.connectAll();
     mcpTools = await mcpManager.listAllTools();
   }
-  
+
   const provider = await createProviderFromConfig(config);
   const systemPrompt = config.system_prompt || 'You are a helpful terminal assistant.';
   const state = createInitialState(options.allowExecute, options.mcpEnabled);
-  
+
   function convertTools(tools: MCPTool[]): any[] {
     if (tools.length === 0) return [];
     switch (provider.name) {
@@ -81,12 +112,155 @@ export async function runOpenTUIApp(options: {
         return [];
     }
   }
-  
+
   let providerTools = convertTools(mcpTools);
-  const commands = createCommands(state, () => {
+  const refreshProviderTools = () => {
     providerTools = state.mcpEnabled ? convertTools(mcpTools) : [];
-  });
+  };
+
   const messages: Message[] = [{ role: 'system', content: systemPrompt }];
+
+  return {
+    config,
+    mcpManager,
+    mcpTools,
+    provider,
+    systemPrompt,
+    state,
+    getProviderTools: () => providerTools,
+    refreshProviderTools,
+    messages,
+  };
+}
+
+function formatToolContent(content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>): string {
+  return content
+    .map(item => {
+      if (item.type === 'text' && item.text) {
+        return item.text;
+      }
+      if (item.data) {
+        return item.data;
+      }
+      return `[${item.type}${item.mimeType ? `: ${item.mimeType}` : ''}]`;
+    })
+    .join('\n')
+    .trim();
+}
+
+async function getAssistantResponse(
+  provider: Awaited<ReturnType<typeof createProviderFromConfig>>,
+  messages: Message[],
+  mcpEnabled: boolean,
+  providerTools: any[],
+): Promise<Message> {
+  if (mcpEnabled && providerTools.length > 0) {
+    return await provider.chatComplete(messages, providerTools);
+  }
+
+  let fullResponse = '';
+  for await (const chunk of provider.chat(messages, mcpEnabled ? providerTools : [])) {
+    if (chunk.content) fullResponse += chunk.content;
+    if (chunk.done) {
+      return {
+        role: 'assistant',
+        content: fullResponse,
+        tool_calls: chunk.tool_calls,
+      };
+    }
+  }
+
+  return {
+    role: 'assistant',
+    content: fullResponse,
+  };
+}
+
+async function runDetectedCommandBlocks(response: string): Promise<void> {
+  const blocks = detectCodeBlocks(response);
+  let mode: PendingExecution['mode'] = 'ask';
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    let decision: ExecutionDecision;
+    if (mode === 'allow-all') {
+      decision = 'allow';
+    } else {
+      decision = await askForExecution(block);
+    }
+
+    if (decision === 'allow-all') {
+      mode = 'allow-all';
+      const remainingCount = blocks.length - index;
+      console.log(`Executing ${remainingCount} command${remainingCount === 1 ? '' : 's'}.`);
+      decision = 'allow';
+    } else if (decision === 'reject-all') {
+      const remainingCount = blocks.length - index;
+      console.log(`Skipped ${remainingCount} command${remainingCount === 1 ? '' : 's'}.`);
+      return;
+    }
+
+    if (decision !== 'allow') {
+      console.log('Skipped command execution.');
+      continue;
+    }
+
+    const result = await executeShellCommand(block.code);
+    console.log(formatCommandResult(result));
+  }
+}
+
+export async function runOneShotApp(options: RunAppOptions & { question: string }): Promise<void> {
+  const runtime = await initializeRuntime(options);
+  const { provider, state, mcpManager, messages } = runtime;
+  let providerTools = runtime.getProviderTools();
+
+  messages.push({ role: 'user', content: options.question });
+
+  try {
+    while (true) {
+      console.log(`${oneShotFeedbackColor}${getRandomOneShotFeedbackPrompt()}${ansiReset}`);
+      const response = await getAssistantResponse(provider, messages, state.mcpEnabled, providerTools);
+
+      if (response.content) {
+        console.log(response.content);
+      }
+
+      messages.push(response);
+
+      if (response.tool_calls && response.tool_calls.length > 0 && mcpManager) {
+        for (const toolCall of response.tool_calls) {
+          const args = toolCall.arguments ? JSON.parse(toolCall.arguments) as Record<string, unknown> : {};
+          const result = await mcpManager.callTool(toolCall.name, args);
+          const content = formatToolContent(result.content);
+          messages.push({
+            role: 'tool',
+            content: content || (result.isError ? 'Tool returned an error.' : 'Tool completed successfully.'),
+            tool_call_id: toolCall.id,
+          });
+        }
+        continue;
+      }
+
+      if (state.allowExecute && response.content) {
+        await runDetectedCommandBlocks(response.content);
+      }
+      break;
+    }
+  } finally {
+    if (mcpManager) {
+      await mcpManager.disconnectAll();
+    }
+  }
+}
+
+export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
+  const runtime = await initializeRuntime(options);
+  const { provider, mcpManager, mcpTools, state, messages } = runtime;
+  let providerTools = runtime.getProviderTools();
+  const commands = createCommands(state, () => {
+    runtime.refreshProviderTools();
+    providerTools = runtime.getProviderTools();
+  });
   
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
@@ -271,7 +445,17 @@ export async function runOpenTUIApp(options: {
 
   function isNegativeAnswer(text: string): boolean {
     const normalized = text.trim().toLowerCase();
-    return normalized === '' || ['n', 'no'].includes(normalized);
+    return ['n', 'no'].includes(normalized);
+  }
+
+  function isAllowAllAnswer(text: string): boolean {
+    const normalized = text.trim().toLowerCase();
+    return ['a', 'all', 'yes-all', 'allow-all'].includes(normalized);
+  }
+
+  function isRejectAllAnswer(text: string): boolean {
+    const normalized = text.trim().toLowerCase();
+    return ['x', 'none', 'no-all', 'reject-all'].includes(normalized);
   }
 
   function promptPendingExecution(): void {
@@ -288,7 +472,25 @@ export async function runOpenTUIApp(options: {
     for (const line of formatCommandBlock(block).split('\n')) {
       addMsg(line, '#ffaa00');
     }
-    addMsg('Allow execution? [y/N]', '#ffaa00');
+    addMsg('Allow execution? [y]es / [n]o / [a]ll / [x] none', '#ffaa00');
+  }
+
+  async function runCommandBlock(block: CommandBlock): Promise<void> {
+    addMsg(`$ ${block.code}`, '#00ff88');
+    const result = await executeShellCommand(block.code);
+    for (const line of formatCommandResult(result).split('\n')) {
+      addMsg(line, result.exitCode === 0 ? '#888888' : '#ff4444');
+    }
+  }
+
+  function advancePendingExecution(): void {
+    if (!pendingExecution) {
+      return;
+    }
+
+    pendingExecution = pendingExecution.index + 1 < pendingExecution.blocks.length
+      ? { ...pendingExecution, index: pendingExecution.index + 1 }
+      : null;
   }
 
   async function handleExecutionApproval(text: string): Promise<void> {
@@ -296,28 +498,46 @@ export async function runOpenTUIApp(options: {
       return;
     }
 
-    const block = pendingExecution.blocks[pendingExecution.index];
-    if (isAffirmativeAnswer(text)) {
-      addMsg(`$ ${block.code}`, '#00ff88');
-      const result = await executeShellCommand(block.code);
-      for (const line of formatCommandResult(result).split('\n')) {
-        addMsg(line, result.exitCode === 0 ? '#888888' : '#ff4444');
+    if (isAllowAllAnswer(text)) {
+      const remainingCount = pendingExecution.blocks.length - pendingExecution.index;
+      addMsg(`Executing ${remainingCount} command${remainingCount === 1 ? '' : 's'}.`, '#888888');
+      while (pendingExecution) {
+        const block = pendingExecution.blocks[pendingExecution.index];
+        await runCommandBlock(block);
+        advancePendingExecution();
       }
-    } else if (isNegativeAnswer(text)) {
-      addMsg('Skipped command execution.', '#888888');
-    } else {
-      addMsg('Reply with y/yes to allow, or n/no to skip.', '#ffaa00');
-      promptPendingExecution();
       return;
     }
 
-    pendingExecution = pendingExecution.index + 1 < pendingExecution.blocks.length
-      ? { ...pendingExecution, index: pendingExecution.index + 1 }
-      : null;
-
-    if (pendingExecution) {
-      promptPendingExecution();
+    if (isRejectAllAnswer(text)) {
+      const remainingBlocks = pendingExecution.blocks.slice(pendingExecution.index);
+      const skippedCount = remainingBlocks.length;
+      addMsg(`Skipped ${skippedCount} command${skippedCount === 1 ? '' : 's'}.`, '#888888');
+      pendingExecution = null;
+      return;
     }
+
+    if (isAffirmativeAnswer(text)) {
+      const block = pendingExecution.blocks[pendingExecution.index];
+      await runCommandBlock(block);
+      advancePendingExecution();
+      if (pendingExecution) {
+        promptPendingExecution();
+      }
+      return;
+    }
+
+    if (isNegativeAnswer(text)) {
+      addMsg('Skipped command execution.', '#888888');
+      advancePendingExecution();
+      if (pendingExecution) {
+        promptPendingExecution();
+      }
+      return;
+    }
+
+    addMsg('Reply with y/n/a/x: yes, no, allow all, or reject all.', '#ffaa00');
+    promptPendingExecution();
   }
 
   async function maybeQueueCommandExecution(response: string): Promise<void> {
@@ -333,23 +553,9 @@ export async function runOpenTUIApp(options: {
     pendingExecution = {
       blocks,
       index: 0,
+      mode: 'ask',
     };
     promptPendingExecution();
-  }
-
-  function formatToolContent(content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>): string {
-    return content
-      .map(item => {
-        if (item.type === 'text' && item.text) {
-          return item.text;
-        }
-        if (item.data) {
-          return item.data;
-        }
-        return `[${item.type}${item.mimeType ? `: ${item.mimeType}` : ''}]`;
-      })
-      .join('\n')
-      .trim();
   }
 
   async function handleToolCalls(toolCalls: ToolCall[]): Promise<void> {
@@ -386,36 +592,15 @@ export async function runOpenTUIApp(options: {
     }
   }
 
-  async function getAssistantResponse(): Promise<Message> {
-    if (state.mcpEnabled && providerTools.length > 0) {
-      return await provider.chatComplete(messages, providerTools);
-    }
-
-    let fullResponse = '';
-    for await (const chunk of provider.chat(messages, state.mcpEnabled ? providerTools : [])) {
-      if (chunk.content) fullResponse += chunk.content;
-      if (chunk.done) {
-        return {
-          role: 'assistant',
-          content: fullResponse,
-          tool_calls: chunk.tool_calls,
-        };
-      }
-    }
-
-    return {
-      role: 'assistant',
-      content: fullResponse,
-    };
-  }
-  
   async function handleInput(text: string) {
-    if (isProcessing || !text.trim()) return;
+    if (isProcessing) return;
 
     if (pendingExecution) {
       await handleExecutionApproval(text);
       return;
     }
+
+    if (!text.trim()) return;
     
     if (text.startsWith('/')) {
       const commandName = text.slice(1).trim();
@@ -433,7 +618,7 @@ export async function runOpenTUIApp(options: {
     
     try {
       while (true) {
-        const response = await getAssistantResponse();
+        const response = await getAssistantResponse(provider, messages, state.mcpEnabled, providerTools);
         removeLastMsg();
 
         if (response.content) {
@@ -480,6 +665,10 @@ export async function runOpenTUIApp(options: {
   }
 
   async function submitCurrentInput() {
+    if (pendingExecution) {
+      return;
+    }
+
     if (palette.open) {
       if (palette.matches.length === 0) {
         return;
@@ -491,7 +680,7 @@ export async function runOpenTUIApp(options: {
       return;
     }
 
-    const text = inputBuffer;
+    const text = inputNode.plainText;
     resetInput();
     await handleInput(text);
   }
@@ -565,6 +754,19 @@ export async function runOpenTUIApp(options: {
       process.exit(0);
     }
 
+    if (pendingExecution && !key.ctrl && !key.meta) {
+      const approvalChar = (
+        (key.sequence && key.sequence.length === 1 ? key.sequence : key.name) || ''
+      ).toLowerCase();
+      if (['y', 'n', 'a', 'x'].includes(approvalChar)) {
+        await handleExecutionApproval(approvalChar);
+        inputNode.setText('');
+        inputBuffer = '';
+        inputNode.focus();
+        return;
+      }
+    }
+
     applyKeyToBuffer(key);
     
     if (palette.open && key.name === 'escape') {
@@ -606,8 +808,4 @@ export async function runOpenTUIApp(options: {
   
   updateFooterLayout();
   inputNode.focus();
-
-  if (options.question) {
-    await handleInput(options.question);
-  }
 }

@@ -31,7 +31,7 @@ bun run start
 src/
 ├── index.ts          # Entry point, CLI argument parsing
 ├── cli.ts            # Commander.js CLI setup
-├── opentui-app.ts    # Main terminal UI
+├── app.ts            # Main terminal UI
 ├── commands.ts       # Slash commands (/help, /exit, etc.)
 ├── config.ts         # Config loading/saving
 ├── shell.ts          # Shell command detection/execution
@@ -64,7 +64,7 @@ src/
 - Classes: PascalCase (`MCPManager`, `OpenAIProvider`)
 - Interfaces: PascalCase (`ProviderConfig`, `Message`)
 - Constants: camelCase or UPPER_CASE for true constants
-- Files: kebab-case (`opentui-app.ts`, `base.ts`)
+- Files: kebab-case (`app.ts`, `base.ts`)
 
 ### Functions
 - Async functions return `Promise<T>`
@@ -92,9 +92,9 @@ try {
 -p, --provider <name>    # Override provider
 -m, --model <name>       # Override model
 -c, --config <path>      # Config file path
---execute <mode>         # Set shell command execution: on or off
---mcp <mode>             # Set MCP servers: on or off
---init                   # Create default config
+-e, --execute <mode>     # Set shell command execution: on or off
+-x, --mcp <mode>         # Set MCP servers: on or off
+-i, --init               # Create default config
 ```
 
 ## Configuration

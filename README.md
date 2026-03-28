@@ -140,9 +140,9 @@ Options:
   -p, --provider <name>  Override provider
   -m, --model <name>     Override model
   -c, --config <path>    Config file path
-  --execute <mode>       Set shell command execution: on or off
-  --mcp <mode>           Set MCP servers: on or off
-  --init                 Create default config file
+  -e, --execute <mode>   Set shell command execution: on or off
+  -x, --mcp <mode>       Set MCP servers: on or off
+  -i, --init             Create default config file
 ```
 
 ### Examples

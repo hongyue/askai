@@ -13,6 +13,8 @@ export interface CommandResult {
   exitCode: number;
 }
 
+export type ExecutionDecision = 'allow' | 'reject' | 'allow-all' | 'reject-all';
+
 export function detectCodeBlocks(text: string): CommandBlock[] {
   const blocks: CommandBlock[] = [];
   const regex = /```(\w+)?\n([\s\S]*?)```/g;
@@ -23,11 +25,18 @@ export function detectCodeBlocks(text: string): CommandBlock[] {
     const code = match[2].trim();
     
     if (['bash', 'sh', 'shell', 'console', 'zsh'].includes(language.toLowerCase())) {
-      blocks.push({
-        language,
-        code,
-        fullMatch: match[0],
-      });
+      const commands = code
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0);
+
+      for (const command of commands) {
+        blocks.push({
+          language,
+          code: command,
+          fullMatch: match[0],
+        });
+      }
     }
   }
   
@@ -41,15 +50,21 @@ export function formatCommandBlock(block: CommandBlock): string {
   return `┌${'─'.repeat(60)}┐\n${formatted}\n└${'─'.repeat(60)}┘`;
 }
 
-export async function askForExecution(block: CommandBlock): Promise<boolean> {
+export async function askForExecution(block: CommandBlock): Promise<ExecutionDecision> {
   console.log('\n' + formatCommandBlock(block));
   
   const { execute } = await inquirer.prompt([
     {
-      type: 'confirm',
+      type: 'list',
       name: 'execute',
       message: 'Execute this command?',
-      default: false,
+      choices: [
+        { name: 'Allow', value: 'allow' },
+        { name: 'Reject', value: 'reject' },
+        { name: 'Allow all remaining', value: 'allow-all' },
+        { name: 'Reject all remaining', value: 'reject-all' },
+      ],
+      default: 'reject',
     },
   ]);
   
