@@ -11,9 +11,14 @@ export interface CommandResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  interrupted?: boolean;
 }
 
 export type ExecutionDecision = 'allow' | 'reject' | 'allow-all' | 'reject-all';
+
+export interface ExecuteCommandOptions {
+  onStart?: (proc: ReturnType<typeof Bun.spawn>) => void;
+}
 
 export function detectCodeBlocks(text: string): CommandBlock[] {
   const blocks: CommandBlock[] = [];
@@ -71,12 +76,15 @@ export async function askForExecution(block: CommandBlock): Promise<ExecutionDec
   return execute;
 }
 
-export async function executeCommand(command: string): Promise<CommandResult> {
+export async function executeCommand(command: string, options?: ExecuteCommandOptions): Promise<CommandResult> {
   try {
     const proc = Bun.spawn(['bash', '-c', command], {
+      detached: true,
+      stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
     });
+    options?.onStart?.(proc);
     
     const stdout = await new Response(proc.stdout).text();
     const stderr = await new Response(proc.stderr).text();
@@ -100,6 +108,10 @@ export async function executeCommand(command: string): Promise<CommandResult> {
 
 export function formatCommandResult(result: CommandResult): string {
   const parts: string[] = [];
+
+  if (result.interrupted) {
+    parts.push('Command interrupted');
+  }
   
   if (result.stdout) {
     parts.push('Output:');

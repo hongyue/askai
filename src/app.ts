@@ -2,7 +2,7 @@ import { createCliRenderer, Box, Text, ScrollBox, StyledText, TextareaRenderable
 import { loadConfig } from './config';
 import { MCPManager, MCPServerState } from './mcp';
 import { createInitialState, createCommands, Command } from './commands';
-import { Message, ToolCall } from './providers/base';
+import { ChatOptions, Message, ToolCall } from './providers/base';
 import { createProviderFromConfig } from './providers';
 import { MCPTool } from './mcp/client';
 import { convertToOpenAITools, convertToAnthropicTools } from './mcp/tools';
@@ -58,6 +58,20 @@ interface RunAppOptions {
   allowExecute: boolean;
   mcpEnabled: boolean;
   question?: string;
+}
+
+interface ActiveTurn {
+  id: number;
+  controller: AbortController;
+  interrupted: boolean;
+}
+
+interface ActiveShellCommand {
+  command: string;
+  proc: ReturnType<typeof Bun.spawn>;
+  interrupted: boolean;
+  interruptStage: 0 | 1 | 2 | 3;
+  escalationTimer?: ReturnType<typeof setTimeout>;
 }
 
 const oneShotFeedbackPrompts = [
@@ -187,13 +201,14 @@ async function getAssistantResponse(
   messages: Message[],
   mcpEnabled: boolean,
   providerTools: any[],
+  options?: ChatOptions,
 ): Promise<Message> {
   if (mcpEnabled && providerTools.length > 0) {
-    return await provider.chatComplete(messages, providerTools);
+    return await provider.chatComplete(messages, providerTools, options);
   }
 
   let fullResponse = '';
-  for await (const chunk of provider.chat(messages, mcpEnabled ? providerTools : [])) {
+  for await (const chunk of provider.chat(messages, mcpEnabled ? providerTools : [], options)) {
     if (chunk.content) fullResponse += chunk.content;
     if (chunk.done) {
       return {
@@ -411,6 +426,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return false;
     }
 
+    if (sequence === '\x03') {
+      return false;
+    }
+
     const lower = sequence.toLowerCase();
     if (lower === 'y' || lower === 'n' || lower === 'a' || lower === 'x') {
       void handleExecutionApproval(lower as ApprovalActionKey);
@@ -450,6 +469,73 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   let approvalDraftCursorOffset = 0;
   let approvalSelectionIndex = 0;
   let approvalActionInFlight = false;
+  let activeTurn: ActiveTurn | null = null;
+  let nextTurnId = 1;
+  let activeShellCommand: ActiveShellCommand | null = null;
+
+  async function handleInterruptSignal(): Promise<boolean> {
+    if (isProcessing && activeTurn) {
+      activeTurn.interrupted = true;
+      activeTurn.controller.abort();
+      return true;
+    }
+
+    if (activeShellCommand) {
+      activeShellCommand.interrupted = true;
+      if (activeShellCommand.interruptStage === 0) {
+        activeShellCommand.interruptStage = 1;
+        try {
+          process.kill(-activeShellCommand.proc.pid, 'SIGINT');
+        } catch {
+          activeShellCommand.proc.kill('SIGINT');
+        }
+        addMsg(`Interrupt requested for shell command: ${activeShellCommand.command}`, '#ffaa00');
+        activeShellCommand.escalationTimer = setTimeout(() => {
+          if (!activeShellCommand || activeShellCommand.proc.killed) {
+            return;
+          }
+          activeShellCommand.interruptStage = 2;
+          try {
+            process.kill(-activeShellCommand.proc.pid, 'SIGTERM');
+          } catch {
+            activeShellCommand.proc.kill('SIGTERM');
+          }
+          addMsg(`Escalating shell command stop: ${activeShellCommand.command}`, '#ffaa00');
+          activeShellCommand.escalationTimer = setTimeout(() => {
+            if (!activeShellCommand || activeShellCommand.proc.killed) {
+              return;
+            }
+            activeShellCommand.interruptStage = 3;
+            try {
+              process.kill(-activeShellCommand.proc.pid, 'SIGKILL');
+            } catch {
+              activeShellCommand.proc.kill('SIGKILL');
+            }
+            addMsg(`Force killed shell command: ${activeShellCommand.command}`, '#ff4444');
+          }, 1500);
+        }, 1500);
+      } else if (activeShellCommand.interruptStage === 1) {
+        try {
+          process.kill(-activeShellCommand.proc.pid, 'SIGTERM');
+        } catch {
+          activeShellCommand.proc.kill('SIGTERM');
+        }
+        activeShellCommand.interruptStage = 2;
+        addMsg(`Escalating shell command stop: ${activeShellCommand.command}`, '#ffaa00');
+      } else if (activeShellCommand.interruptStage === 2) {
+        try {
+          process.kill(-activeShellCommand.proc.pid, 'SIGKILL');
+        } catch {
+          activeShellCommand.proc.kill('SIGKILL');
+        }
+        activeShellCommand.interruptStage = 3;
+        addMsg(`Force killed shell command: ${activeShellCommand.command}`, '#ff4444');
+      }
+      return true;
+    }
+
+    return false;
+  }
   
   const root = Box({ width: '100%', height: '100%', flexDirection: 'column' });
   root.add(Text({ content: ` Welcome to askai! (${provider.name} / ${provider.model})`, fg: '#00d4ff' }));
@@ -874,6 +960,17 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
   }
 
+  function isAbortError(error: unknown): boolean {
+    return error instanceof Error
+      && (error.name === 'AbortError' || error.message.toLowerCase().includes('abort'));
+  }
+
+  function ensureActiveTurn(turnId: number): void {
+    if (!activeTurn || activeTurn.id !== turnId || activeTurn.controller.signal.aborted) {
+      throw new Error('Turn interrupted');
+    }
+  }
+
   function renderPalette() {
     cmdListBoxNode.visible = palette.open;
     updateFooterLayout();
@@ -992,7 +1089,27 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
   async function runCommandBlock(block: CommandBlock): Promise<void> {
     addMsg(`$ ${block.code}`, '#00ff88');
-    const result = await executeShellCommand(block.code);
+    let shellCommandRef: ActiveShellCommand | undefined;
+    const result = await executeShellCommand(block.code, {
+      onStart: (proc) => {
+        shellCommandRef = {
+          command: block.code,
+          proc,
+          interrupted: false,
+          interruptStage: 0,
+        };
+        activeShellCommand = shellCommandRef;
+      },
+    });
+    if (shellCommandRef?.escalationTimer) {
+      clearTimeout(shellCommandRef.escalationTimer);
+    }
+    if (shellCommandRef && shellCommandRef.interrupted) {
+      result.interrupted = true;
+    }
+    if (activeShellCommand?.command === block.code) {
+      activeShellCommand = null;
+    }
     for (const line of formatCommandResult(result).split('\n')) {
       addMsg(line, result.exitCode === 0 ? '#888888' : '#ff4444');
     }
@@ -1087,12 +1204,16 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     promptPendingExecution();
   }
 
-  async function handleToolCalls(toolCalls: ToolCall[]): Promise<void> {
+  async function handleToolCalls(toolCalls: ToolCall[], turnId?: number): Promise<void> {
     if (!mcpManager || toolCalls.length === 0) {
       return;
     }
 
     for (const toolCall of toolCalls) {
+      if (turnId !== undefined) {
+        ensureActiveTurn(turnId);
+      }
+
       const args = toolCall.arguments ? JSON.parse(toolCall.arguments) as Record<string, unknown> : {};
       addMsg(`Using tool: ${toolCall.name}`, '#ffaa00');
 
@@ -1140,13 +1261,24 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
     
     isProcessing = true;
+    const turnId = nextTurnId++;
+    const controller = new AbortController();
+    activeTurn = {
+      id: turnId,
+      controller,
+      interrupted: false,
+    };
     addMsg(`> ${text}`, '#00ff88');
     addMsg('Thinking...', '#888888');
     messages.push({ role: 'user', content: text });
     
     try {
       while (true) {
-        const response = await getAssistantResponse(provider, messages, state.mcpEnabled, providerTools);
+        ensureActiveTurn(turnId);
+        const response = await getAssistantResponse(provider, messages, state.mcpEnabled, providerTools, {
+          signal: controller.signal,
+        });
+        ensureActiveTurn(turnId);
         removeLastMsg();
 
         if (response.content) {
@@ -1158,7 +1290,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         messages.push(response);
 
         if (response.tool_calls && response.tool_calls.length > 0) {
-          await handleToolCalls(response.tool_calls);
+          await handleToolCalls(response.tool_calls, turnId);
+          ensureActiveTurn(turnId);
           addMsg('Thinking...', '#888888');
           continue;
         }
@@ -1171,14 +1304,21 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       }
     } catch (error) {
       removeLastMsg();
-      addMsg(`Error: ${error instanceof Error ? error.message : 'Unknown'}`, '#ff4444');
+      if (isAbortError(error) || (error instanceof Error && error.message === 'Turn interrupted')) {
+        addMsg('Interrupted.', '#ffaa00');
+      } else {
+        addMsg(`Error: ${error instanceof Error ? error.message : 'Unknown'}`, '#ff4444');
+      }
     }
     isProcessing = false;
+    if (activeTurn?.id === turnId) {
+      activeTurn = null;
+    }
   }
   
   async function executeCommand(cmd: Command) {
     addMsg(`> /${cmd.name}`, '#00ff88');
-    if (cmd.name === 'exit') {
+    if (cmd.name === 'exit' || cmd.name === 'quit') {
       if (mcpManager) await mcpManager.disconnectAll();
       renderer.destroy();
       process.exit(0);
@@ -1293,6 +1433,9 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   // Handle global keyboard
   renderer.keyInput.on('keypress', async (key: KeyEvent) => {
     if (key.ctrl && key.name === 'c') {
+      if (await handleInterruptSignal()) {
+        return;
+      }
       if (mcpManager) await mcpManager.disconnectAll();
       renderer.destroy();
       process.exit(0);
@@ -1354,6 +1497,19 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       }
     }
   });
+
+  const sigintHandler = async () => {
+    if (await handleInterruptSignal()) {
+      return;
+    }
+    if (mcpManager) {
+      await mcpManager.disconnectAll();
+    }
+    renderer.destroy();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', sigintHandler);
   
   updateFooterLayout();
   inputNode.focus();

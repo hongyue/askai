@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { ProviderConfig } from '../config';
-import { Message, StreamChunk, Provider, ToolCall } from './base';
+import { ChatOptions, Message, StreamChunk, Provider, ToolCall } from './base';
 import { OpenAITool } from '../mcp/tools';
 
 export class OpenAIProvider implements Provider {
@@ -17,7 +17,7 @@ export class OpenAIProvider implements Provider {
     });
   }
   
-  async *chat(messages: Message[], tools?: OpenAITool[]): AsyncGenerator<StreamChunk, void, unknown> {
+  async *chat(messages: Message[], tools?: OpenAITool[], options?: ChatOptions): AsyncGenerator<StreamChunk, void, unknown> {
     try {
       const request: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
         model: this.model,
@@ -48,7 +48,9 @@ export class OpenAIProvider implements Provider {
         request.tools = tools;
       }
 
-      const stream = await this.client.chat.completions.create(request);
+      const stream = await this.client.chat.completions.create(request, {
+        signal: options?.signal,
+      });
       
       let toolCalls: ToolCall[] = [];
       
@@ -102,7 +104,7 @@ export class OpenAIProvider implements Provider {
     }
   }
   
-  async chatComplete(messages: Message[], tools?: OpenAITool[]): Promise<Message> {
+  async chatComplete(messages: Message[], tools?: OpenAITool[], options?: ChatOptions): Promise<Message> {
     try {
       const request: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
         model: this.model,
@@ -132,7 +134,9 @@ export class OpenAIProvider implements Provider {
         request.tools = tools;
       }
 
-      const response = await this.client.chat.completions.create(request);
+      const response = await this.client.chat.completions.create(request, {
+        signal: options?.signal,
+      });
       const choice = response.choices[0];
       
       const result: Message = {

@@ -50,7 +50,14 @@ export function createCommands(
     },
     {
       name: 'exit',
-      description: 'Exit the application',
+      description: 'Exit askai',
+      action: () => {
+        // This is handled specially in the app
+      },
+    },
+    {
+      name: 'quit',
+      description: 'Exit askai',
       action: () => {
         // This is handled specially in the app
       },

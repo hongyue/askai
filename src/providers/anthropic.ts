@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { Beta } from '@anthropic-ai/sdk/resources/index';
 import { ProviderConfig } from '../config';
-import { Message, StreamChunk, Provider, ToolCall } from './base';
+import { ChatOptions, Message, StreamChunk, Provider, ToolCall } from './base';
 import { AnthropicTool } from '../mcp/tools';
 
 type AnthropicToolsMessageParam = Beta.Tools.ToolsBetaMessageParam;
@@ -20,9 +20,9 @@ export class AnthropicProvider implements Provider {
     });
   }
   
-  async *chat(messages: Message[], tools?: AnthropicTool[]): AsyncGenerator<StreamChunk, void, unknown> {
+  async *chat(messages: Message[], tools?: AnthropicTool[], options?: ChatOptions): AsyncGenerator<StreamChunk, void, unknown> {
     if (tools && tools.length > 0) {
-      const response = await this.chatComplete(messages, tools);
+      const response = await this.chatComplete(messages, tools, options);
       yield {
         content: response.content,
         done: true,
@@ -43,7 +43,9 @@ export class AnthropicProvider implements Provider {
         system: systemMessage?.content || '',
         messages: chatMessages,
       };
-      const stream = this.client.messages.stream(params);
+      const stream = this.client.messages.stream(params, {
+        signal: options?.signal,
+      });
 
       for await (const event of stream) {
         if (event.type === 'content_block_delta') {
@@ -65,7 +67,7 @@ export class AnthropicProvider implements Provider {
     }
   }
   
-  async chatComplete(messages: Message[], tools?: AnthropicTool[]): Promise<Message> {
+  async chatComplete(messages: Message[], tools?: AnthropicTool[], options?: ChatOptions): Promise<Message> {
     try {
       const systemMessage = messages.find(m => m.role === 'system');
       const chatMessages = messages
@@ -113,6 +115,8 @@ export class AnthropicProvider implements Provider {
             system: systemMessage?.content || '',
             messages: chatMessages,
             tools,
+          }, {
+            signal: options?.signal,
           })
         : await this.client.messages.create({
             model: this.model,
@@ -121,6 +125,8 @@ export class AnthropicProvider implements Provider {
             messages: chatMessages.filter(
               (m): m is Anthropic.MessageParam => typeof m.content === 'string'
             ),
+          }, {
+            signal: options?.signal,
           });
       
       const result: Message = {

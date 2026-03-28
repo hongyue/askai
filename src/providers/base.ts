@@ -20,12 +20,16 @@ export interface ToolCall {
   arguments: string;
 }
 
+export interface ChatOptions {
+  signal?: AbortSignal;
+}
+
 export interface Provider {
   readonly name: string;
   readonly model: string;
   
-  chat(messages: Message[], tools?: OpenAITool[] | AnthropicTool[]): AsyncGenerator<StreamChunk, void, unknown>;
-  chatComplete(messages: Message[], tools?: OpenAITool[] | AnthropicTool[]): Promise<Message>;
+  chat(messages: Message[], tools?: OpenAITool[] | AnthropicTool[], options?: ChatOptions): AsyncGenerator<StreamChunk, void, unknown>;
+  chatComplete(messages: Message[], tools?: OpenAITool[] | AnthropicTool[], options?: ChatOptions): Promise<Message>;
 }
 
 export interface ProviderConstructor {
