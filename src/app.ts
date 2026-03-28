@@ -86,6 +86,7 @@ const oneShotFeedbackColor = '\x1b[38;5;45m';
 const ansiReset = '\x1b[0m';
 const mcpDetailsModalHeight = 20;
 const mcpDetailsVisibleLineCount = 15;
+const statusSpinnerFrames = ['|', '/', '-', '\\'] as const;
 const approvalActions = [
   { key: 'y', label: 'Yes' },
   { key: 'n', label: 'No' },
@@ -472,6 +473,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   let activeTurn: ActiveTurn | null = null;
   let nextTurnId = 1;
   let activeShellCommand: ActiveShellCommand | null = null;
+  let statusSpinnerIndex = 0;
 
   async function handleInterruptSignal(): Promise<boolean> {
     if (isProcessing && activeTurn) {
@@ -564,6 +566,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const cmdListText = Text({ id: 'command-palette', content: stringToStyledText(''), fg: '#888888' });
   cmdListBox.add(cmdListText);
 
+  const statusBar = Box({
+    id: 'status-bar',
+    width: '100%',
+    height: 1,
+    flexShrink: 0,
+    backgroundColor: '#181818',
+    paddingLeft: 1,
+    paddingRight: 1,
+  });
+  const statusBarText = Text({
+    id: 'status-bar-text',
+    content: stringToStyledText(' Ready'),
+    fg: '#7a7a7a',
+  });
+  statusBar.add(statusBarText);
+
   const approvalDialog = Box({
     id: 'approval-dialog',
     position: 'absolute',
@@ -652,6 +670,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   inputRow.add(input);
   root.add(inputRow);
   root.add(cmdListBox);
+  root.add(statusBar);
   root.add(approvalDialog);
   root.add(mcpModal);
   root.add(mcpDetailsModal);
@@ -659,6 +678,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
   const liveCmdListBox = renderer.root.findDescendantById('cmd-list-box') as MutableBoxNode | undefined;
   const liveCmdListText = renderer.root.findDescendantById('command-palette') as MutableTextNode | undefined;
+  const liveStatusBarText = renderer.root.findDescendantById('status-bar-text') as MutableTextNode | undefined;
   const liveInput = renderer.root.findDescendantById('main-input') as MutableInputNode | undefined;
   const liveChat = renderer.root.findDescendantById('chat-box') as MutableBoxNode | undefined;
   const liveApprovalDialog = renderer.root.findDescendantById('approval-dialog') as MutableBoxNode | undefined;
@@ -668,12 +688,13 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const liveMcpDetailsModal = renderer.root.findDescendantById('mcp-details-modal') as MutableBoxNode | undefined;
   const liveMcpDetailsModalText = renderer.root.findDescendantById('mcp-details-modal-text') as MutableTextNode | undefined;
 
-  if (!liveCmdListBox || !liveCmdListText || !liveInput || !liveChat || !liveApprovalDialog || !liveApprovalDialogText || !liveMcpModal || !liveMcpModalText || !liveMcpDetailsModal || !liveMcpDetailsModalText) {
+  if (!liveCmdListBox || !liveCmdListText || !liveStatusBarText || !liveInput || !liveChat || !liveApprovalDialog || !liveApprovalDialogText || !liveMcpModal || !liveMcpModalText || !liveMcpDetailsModal || !liveMcpDetailsModalText) {
     throw new Error('Failed to initialize TUI render tree');
   }
 
   const cmdListBoxNode = liveCmdListBox;
   const cmdListTextNode = liveCmdListText;
+  const statusBarTextNode = liveStatusBarText;
   const inputNode = liveInput;
   const chatNode = liveChat;
   const approvalDialogNode = liveApprovalDialog;
@@ -686,6 +707,34 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   function updateFooterLayout() {
     const paletteHeight = palette.open ? Math.min(palette.matches.length, 5) : 0;
     cmdListBoxNode.height = paletteHeight;
+    root.requestRender();
+  }
+
+  function renderStatusBar(): void {
+    if (activeShellCommand) {
+      const spinner = statusSpinnerFrames[statusSpinnerIndex % statusSpinnerFrames.length];
+      statusBarTextNode.content = new StyledText([
+        fg('#ffaa00')(` ${spinner} `),
+        fg('#d8d8d8')('Running shell command. Ctrl+C to interrupt'),
+      ]);
+      root.requestRender();
+      return;
+    }
+
+    if (isProcessing && activeTurn) {
+      const spinner = statusSpinnerFrames[statusSpinnerIndex % statusSpinnerFrames.length];
+      statusBarTextNode.content = new StyledText([
+        fg('#00d4ff')(` ${spinner} `),
+        fg('#d8d8d8')('Requesting LLM. Ctrl+C to interrupt'),
+      ]);
+      root.requestRender();
+      return;
+    }
+
+    statusBarTextNode.content = new StyledText([
+      fg('#5f5f5f')(' . '),
+      fg('#7a7a7a')('Ready'),
+    ]);
     root.requestRender();
   }
 
@@ -1099,6 +1148,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
           interruptStage: 0,
         };
         activeShellCommand = shellCommandRef;
+        renderStatusBar();
       },
     });
     if (shellCommandRef?.escalationTimer) {
@@ -1110,6 +1160,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     if (activeShellCommand?.command === block.code) {
       activeShellCommand = null;
     }
+    renderStatusBar();
     for (const line of formatCommandResult(result).split('\n')) {
       addMsg(line, result.exitCode === 0 ? '#888888' : '#ff4444');
     }
@@ -1270,6 +1321,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     };
     addMsg(`> ${text}`, '#00ff88');
     addMsg('Thinking...', '#888888');
+    renderStatusBar();
     messages.push({ role: 'user', content: text });
     
     try {
@@ -1314,6 +1366,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     if (activeTurn?.id === turnId) {
       activeTurn = null;
     }
+    renderStatusBar();
   }
   
   async function executeCommand(cmd: Command) {
@@ -1510,7 +1563,14 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   };
 
   process.on('SIGINT', sigintHandler);
+  const statusSpinnerTimer = setInterval(() => {
+    statusSpinnerIndex = (statusSpinnerIndex + 1) % statusSpinnerFrames.length;
+    if (activeShellCommand || (isProcessing && activeTurn)) {
+      renderStatusBar();
+    }
+  }, 120);
   
   updateFooterLayout();
+  renderStatusBar();
   inputNode.focus();
 }
