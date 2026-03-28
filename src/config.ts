@@ -24,6 +24,7 @@ export interface Config {
     [key: string]: ProviderConfig;
   };
   system_prompt?: string;
+  allowExecute?: boolean;
   mcp?: MCPConfig;
   mcpServers?: {
     [key: string]: MCPServerConfig;
@@ -86,6 +87,7 @@ function validateConfig(config: unknown): Config {
     provider: cfg.provider as string,
     providers: cfg.providers as Config['providers'],
     system_prompt: (cfg.system_prompt as string) || DEFAULT_SYSTEM_PROMPT,
+    allowExecute: typeof cfg.allowExecute === 'boolean' ? cfg.allowExecute : undefined,
     mcp: cfg.mcp as Config['mcp'],
     mcpServers: cfg.mcpServers as Config['mcpServers'],
   };
@@ -107,6 +109,7 @@ export async function createDefaultConfig(configPath?: string): Promise<void> {
         base_url: 'http://172.17.0.21:8080/v1'
       }
     },
+    allowExecute: true,
     mcp: {
       autoExecute: false
     }

@@ -1,11 +1,18 @@
 import { createCliRenderer, Box, Text, ScrollBox, StyledText, TextareaRenderable, fg, h, stringToStyledText, type KeyEvent } from "@opentui/core"
 import { loadConfig } from './config';
-import { createProviderFromConfig } from './chat';
 import { MCPManager } from './mcp';
 import { createInitialState, createCommands, Command } from './commands';
-import { Message } from './providers/base';
+import { Message, ToolCall } from './providers/base';
+import { createProviderFromConfig } from './providers';
 import { MCPTool } from './mcp/client';
 import { convertToOpenAITools, convertToAnthropicTools } from './mcp/tools';
+import {
+  detectCodeBlocks,
+  executeCommand as executeShellCommand,
+  formatCommandBlock,
+  formatCommandResult,
+  type CommandBlock,
+} from './shell';
 
 interface MutableTextNode {
   content: ReturnType<typeof stringToStyledText>;
@@ -14,7 +21,6 @@ interface MutableTextNode {
 interface MutableBoxNode {
   height: number | 'auto' | `${number}%`;
   visible: boolean;
-  paddingBottom?: number | `${number}%`;
   add(obj: unknown, index?: number): number;
   remove(id: string): void;
 }
@@ -34,12 +40,18 @@ interface PaletteState {
   matches: Command[];
 }
 
+interface PendingExecution {
+  blocks: CommandBlock[];
+  index: number;
+}
+
 export async function runOpenTUIApp(options: {
   providerName?: string;
   modelName?: string;
   configPath?: string;
   allowExecute: boolean;
   mcpEnabled: boolean;
+  question?: string;
 }): Promise<void> {
   const config = await loadConfig(options.configPath);
   if (options.providerName) config.provider = options.providerName;
@@ -89,6 +101,7 @@ export async function runOpenTUIApp(options: {
     selectedIndex: 0,
     matches: [...commands],
   };
+  let pendingExecution: PendingExecution | null = null;
   
   const root = Box({ width: '100%', height: '100%', flexDirection: 'column' });
   root.add(Text({ content: ` Welcome to askai! (${provider.name} / ${provider.model})`, fg: '#00d4ff' }));
@@ -97,6 +110,7 @@ export async function runOpenTUIApp(options: {
     id: 'chat-box',
     width: '100%',
     flexGrow: 1,
+    minHeight: 0,
     padding: 1,
     scrollY: true,
     stickyScroll: true,
@@ -104,12 +118,6 @@ export async function runOpenTUIApp(options: {
   });
   root.add(chat);
   const chatNodeIds: string[] = [];
-  
-  const footer = Box({
-    id: 'tui-footer',
-    width: '100%',
-    flexDirection: 'column',
-  });
 
   const cmdListBox = Box({
     id: 'cmd-list-box',
@@ -125,17 +133,25 @@ export async function runOpenTUIApp(options: {
   const inputRow = Box({
     id: 'input-row',
     width: '100%',
-    height: 3,
+    height: 'auto',
+    flexShrink: 0,
     flexDirection: 'row',
+    backgroundColor: '#1f1f1f',
+    paddingLeft: 1,
+    paddingRight: 1,
   });
   inputRow.add(Text({ content: ' > ', fg: '#00d4ff' }));
   
   const input = h(TextareaRenderable, {
     id: 'main-input',
     flexGrow: 1,
-    height: 3,
+    height: 'auto',
+    minHeight: 1,
+    maxHeight: 20,
     placeholder: 'Type / for commands...',
     textColor: '#ffffff',
+    backgroundColor: '#1f1f1f',
+    focusedBackgroundColor: '#262626',
     cursorColor: '#00d4ff',
     wrapMode: 'word',
     keyBindings: [
@@ -143,22 +159,19 @@ export async function runOpenTUIApp(options: {
     ],
   });
   inputRow.add(input);
-  footer.add(inputRow);
-  footer.add(cmdListBox);
-  root.add(footer);
+  root.add(inputRow);
+  root.add(cmdListBox);
   renderer.root.add(root);
 
-  const liveFooter = renderer.root.findDescendantById('tui-footer') as MutableBoxNode | undefined;
   const liveCmdListBox = renderer.root.findDescendantById('cmd-list-box') as MutableBoxNode | undefined;
   const liveCmdListText = renderer.root.findDescendantById('command-palette') as MutableTextNode | undefined;
   const liveInput = renderer.root.findDescendantById('main-input') as MutableInputNode | undefined;
   const liveChat = renderer.root.findDescendantById('chat-box') as MutableBoxNode | undefined;
 
-  if (!liveFooter || !liveCmdListBox || !liveCmdListText || !liveInput || !liveChat) {
+  if (!liveCmdListBox || !liveCmdListText || !liveInput || !liveChat) {
     throw new Error('Failed to initialize TUI render tree');
   }
 
-  const footerNode = liveFooter;
   const cmdListBoxNode = liveCmdListBox;
   const cmdListTextNode = liveCmdListText;
   const inputNode = liveInput;
@@ -166,10 +179,8 @@ export async function runOpenTUIApp(options: {
 
   function updateFooterLayout() {
     const paletteHeight = palette.open ? Math.min(palette.matches.length, 5) : 0;
-    const footerHeight = paletteHeight + 3;
     cmdListBoxNode.height = paletteHeight;
-    footerNode.height = footerHeight;
-    chatNode.paddingBottom = footerHeight;
+    root.requestRender();
   }
   
   function addMsg(text: string, color = '#ffffff') {
@@ -252,9 +263,159 @@ export async function runOpenTUIApp(options: {
     closePalette();
     inputNode.focus();
   }
+
+  function isAffirmativeAnswer(text: string): boolean {
+    const normalized = text.trim().toLowerCase();
+    return ['y', 'yes'].includes(normalized);
+  }
+
+  function isNegativeAnswer(text: string): boolean {
+    const normalized = text.trim().toLowerCase();
+    return normalized === '' || ['n', 'no'].includes(normalized);
+  }
+
+  function promptPendingExecution(): void {
+    if (!pendingExecution) {
+      return;
+    }
+
+    const block = pendingExecution.blocks[pendingExecution.index];
+    const ordinal = pendingExecution.blocks.length > 1
+      ? ` (${pendingExecution.index + 1}/${pendingExecution.blocks.length})`
+      : '';
+
+    addMsg(`Shell command detected${ordinal}:`, '#ffaa00');
+    for (const line of formatCommandBlock(block).split('\n')) {
+      addMsg(line, '#ffaa00');
+    }
+    addMsg('Allow execution? [y/N]', '#ffaa00');
+  }
+
+  async function handleExecutionApproval(text: string): Promise<void> {
+    if (!pendingExecution) {
+      return;
+    }
+
+    const block = pendingExecution.blocks[pendingExecution.index];
+    if (isAffirmativeAnswer(text)) {
+      addMsg(`$ ${block.code}`, '#00ff88');
+      const result = await executeShellCommand(block.code);
+      for (const line of formatCommandResult(result).split('\n')) {
+        addMsg(line, result.exitCode === 0 ? '#888888' : '#ff4444');
+      }
+    } else if (isNegativeAnswer(text)) {
+      addMsg('Skipped command execution.', '#888888');
+    } else {
+      addMsg('Reply with y/yes to allow, or n/no to skip.', '#ffaa00');
+      promptPendingExecution();
+      return;
+    }
+
+    pendingExecution = pendingExecution.index + 1 < pendingExecution.blocks.length
+      ? { ...pendingExecution, index: pendingExecution.index + 1 }
+      : null;
+
+    if (pendingExecution) {
+      promptPendingExecution();
+    }
+  }
+
+  async function maybeQueueCommandExecution(response: string): Promise<void> {
+    if (!state.allowExecute) {
+      return;
+    }
+
+    const blocks = detectCodeBlocks(response);
+    if (blocks.length === 0) {
+      return;
+    }
+
+    pendingExecution = {
+      blocks,
+      index: 0,
+    };
+    promptPendingExecution();
+  }
+
+  function formatToolContent(content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>): string {
+    return content
+      .map(item => {
+        if (item.type === 'text' && item.text) {
+          return item.text;
+        }
+        if (item.data) {
+          return item.data;
+        }
+        return `[${item.type}${item.mimeType ? `: ${item.mimeType}` : ''}]`;
+      })
+      .join('\n')
+      .trim();
+  }
+
+  async function handleToolCalls(toolCalls: ToolCall[]): Promise<void> {
+    if (!mcpManager || toolCalls.length === 0) {
+      return;
+    }
+
+    for (const toolCall of toolCalls) {
+      const args = toolCall.arguments ? JSON.parse(toolCall.arguments) as Record<string, unknown> : {};
+      addMsg(`Using tool: ${toolCall.name}`, '#ffaa00');
+
+      try {
+        const result = await mcpManager.callTool(toolCall.name, args);
+        const content = formatToolContent(result.content);
+        if (content) {
+          for (const line of content.split('\n')) {
+            addMsg(line, result.isError ? '#ff4444' : '#888888');
+          }
+        }
+        messages.push({
+          role: 'tool',
+          content: content || (result.isError ? 'Tool returned an error.' : 'Tool completed successfully.'),
+          tool_call_id: toolCall.id,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown tool error';
+        addMsg(`Tool error (${toolCall.name}): ${message}`, '#ff4444');
+        messages.push({
+          role: 'tool',
+          content: `Error: ${message}`,
+          tool_call_id: toolCall.id,
+        });
+      }
+    }
+  }
+
+  async function getAssistantResponse(): Promise<Message> {
+    if (state.mcpEnabled && providerTools.length > 0) {
+      return await provider.chatComplete(messages, providerTools);
+    }
+
+    let fullResponse = '';
+    for await (const chunk of provider.chat(messages, state.mcpEnabled ? providerTools : [])) {
+      if (chunk.content) fullResponse += chunk.content;
+      if (chunk.done) {
+        return {
+          role: 'assistant',
+          content: fullResponse,
+          tool_calls: chunk.tool_calls,
+        };
+      }
+    }
+
+    return {
+      role: 'assistant',
+      content: fullResponse,
+    };
+  }
   
   async function handleInput(text: string) {
     if (isProcessing || !text.trim()) return;
+
+    if (pendingExecution) {
+      await handleExecutionApproval(text);
+      return;
+    }
     
     if (text.startsWith('/')) {
       const commandName = text.slice(1).trim();
@@ -271,17 +432,29 @@ export async function runOpenTUIApp(options: {
     messages.push({ role: 'user', content: text });
     
     try {
-      let fullResponse = '';
-      for await (const chunk of provider.chat(messages, state.mcpEnabled ? providerTools : [])) {
-        if (chunk.content) fullResponse += chunk.content;
-        if (chunk.done) break;
-      }
-      removeLastMsg();
-      if (fullResponse) {
-        for (const line of fullResponse.split('\n')) {
-          addMsg(line);
+      while (true) {
+        const response = await getAssistantResponse();
+        removeLastMsg();
+
+        if (response.content) {
+          for (const line of response.content.split('\n')) {
+            addMsg(line);
+          }
         }
-        messages.push({ role: 'assistant', content: fullResponse });
+
+        messages.push(response);
+
+        if (response.tool_calls && response.tool_calls.length > 0) {
+          await handleToolCalls(response.tool_calls);
+          addMsg('Thinking...', '#888888');
+          continue;
+        }
+
+        break;
+      }
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage?.role === 'assistant' && lastMessage.content) {
+        await maybeQueueCommandExecution(lastMessage.content);
       }
     } catch (error) {
       removeLastMsg();
@@ -433,4 +606,8 @@ export async function runOpenTUIApp(options: {
   
   updateFooterLayout();
   inputNode.focus();
+
+  if (options.question) {
+    await handleInput(options.question);
+  }
 }

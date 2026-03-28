@@ -19,9 +19,6 @@ bun run build
 # Run directly
 bun run start
 
-# Run with OpenTUI interface
-./askai --tui
-
 # Run built binary
 ./askai [question...]
 ```
@@ -34,15 +31,13 @@ bun run start
 src/
 ├── index.ts          # Entry point, CLI argument parsing
 ├── cli.ts            # Commander.js CLI setup
-├── app.ts            # Main app logic (readline mode)
-├── opentui-app.ts    # OpenTUI-based terminal UI
-├── chat.ts           # Chat loop, provider integration
+├── opentui-app.ts    # Main terminal UI
 ├── commands.ts       # Slash commands (/help, /exit, etc.)
 ├── config.ts         # Config loading/saving
-├── input.ts          # Readline input handling
 ├── shell.ts          # Shell command detection/execution
 ├── providers/
 │   ├── base.ts       # Provider interface
+│   ├── index.ts      # Provider exports and factory
 │   ├── openai.ts     # OpenAI provider
 │   └── anthropic.ts  # Anthropic provider
 └── mcp/
@@ -97,10 +92,9 @@ try {
 -p, --provider <name>    # Override provider
 -m, --model <name>       # Override model
 -c, --config <path>      # Config file path
---no-execute             # Disable shell command execution
---no-mcp                 # Disable MCP servers
+--execute <mode>         # Set shell command execution: on or off
+--mcp <mode>             # Set MCP servers: on or off
 --init                   # Create default config
---tui                    # Use OpenTUI interface
 ```
 
 ## Configuration
@@ -115,6 +109,7 @@ Config location: `~/.askai/config.json`
     "openai": { "api_key": "...", "model": "gpt-4o" },
     "anthropic": { "api_key": "...", "model": "claude-sonnet-4-20250514" }
   },
+  "allowExecute": true,
   "mcpServers": {
     "server-name": { "command": "npx", "args": [...] }
   }

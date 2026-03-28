@@ -6,7 +6,7 @@ A terminal AI agent that answers your questions with streaming responses and she
 
 - **Multiple Providers**: OpenAI, Anthropic (Claude), Ollama, llama.cpp (OpenAI-compatible)
 - **MCP Support**: Connect to MCP servers for extended tools
-- **Two Modes**: Interactive REPL and oneshot queries
+- **Terminal UI**: Interactive TUI with command palette and oneshot queries
 - **Streaming**: Real-time response streaming
 - **Shell Execution**: Detect and execute bash commands with user approval
 - **Single Binary**: Compiled with Bun for easy distribution
@@ -103,6 +103,7 @@ Or manually create it:
       "model": "claude-sonnet-4-20250514"
     }
   },
+  "allowExecute": true,
   "mcp": {
     "autoExecute": false
   },
@@ -139,8 +140,8 @@ Options:
   -p, --provider <name>  Override provider
   -m, --model <name>     Override model
   -c, --config <path>    Config file path
-  --no-execute           Disable shell command execution
-  --no-mcp               Disable MCP servers
+  --execute <mode>       Set shell command execution: on or off
+  --mcp <mode>           Set MCP servers: on or off
   --init                 Create default config file
 ```
 
@@ -154,10 +155,16 @@ askai -p openai explain quantum computing
 askai -m gpt-4o-mini quick question
 
 # Disable command execution
-askai --no-execute how do I list files
+askai --execute off how do I list files
+
+# Enable command execution
+askai --execute on how do I list files
 
 # Disable MCP
-askai --no-mcp what is 2+2
+askai --mcp off what is 2+2
+
+# Enable MCP
+askai --mcp on what is 2+2
 
 # Use custom config
 askai -c ./my-config.json hello
@@ -175,6 +182,14 @@ When the AI suggests a bash command, it will be displayed in a formatted box and
 ```
 
 Type `y` to execute or `n` to skip.
+
+Set the default in config with:
+
+```json
+{
+  "allowExecute": true
+}
+```
 
 ## MCP Support
 

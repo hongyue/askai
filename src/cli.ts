@@ -1,6 +1,6 @@
 import { Command } from 'commander';
-import { createDefaultConfig } from './config';
-import { runApp } from './app';
+import { createDefaultConfig, loadConfig } from './config';
+import { runOpenTUIApp } from './opentui-app';
 
 export const program = new Command();
 
@@ -14,10 +14,9 @@ program
   .option('-p, --provider <name>', 'Override provider')
   .option('-m, --model <name>', 'Override model')
   .option('-c, --config <path>', 'Config file path')
-  .option('--no-execute', 'Disable shell command execution')
-  .option('--no-mcp', 'Disable MCP servers')
+  .option('--execute <mode>', 'Set shell command execution: on or off')
+  .option('--mcp <mode>', 'Set MCP servers: on or off')
   .option('--init', 'Create a default config file')
-  .option('--tui', 'Use OpenTUI interface (fixed prompt at bottom)')
   .action(async (question: string[] | undefined, options) => {
     if (options.init) {
       try {
@@ -32,32 +31,34 @@ program
 
     const questionText = question && question.length > 0 ? question.join(' ') : undefined;
 
-    // Use OpenTUI if requested and TTY available
-    if (options.tui && process.stdin.isTTY) {
-      try {
-        const { runOpenTUIApp } = await import('./opentui-app');
-        await runOpenTUIApp({
-          providerName: options.provider,
-          modelName: options.model,
-          configPath: options.config,
-          allowExecute: options.execute !== false,
-          mcpEnabled: options.mcp !== false,
-        });
-        return;
-      } catch (error) {
-        console.error(`OpenTUI failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        console.log('Falling back to readline mode...\n');
-      }
-    }
-
-    // Default readline mode
     try {
-      await runApp({
+      const config = await loadConfig(options.config);
+      let allowExecute = config.allowExecute ?? true;
+      if (options.execute !== undefined) {
+        if (options.execute === 'on') {
+          allowExecute = true;
+        } else if (options.execute === 'off') {
+          allowExecute = false;
+        } else {
+          throw new Error('Invalid value for --execute. Use "on" or "off".');
+        }
+      }
+      let mcpEnabled = true;
+      if (options.mcp !== undefined) {
+        if (options.mcp === 'on') {
+          mcpEnabled = true;
+        } else if (options.mcp === 'off') {
+          mcpEnabled = false;
+        } else {
+          throw new Error('Invalid value for --mcp. Use "on" or "off".');
+        }
+      }
+      await runOpenTUIApp({
         providerName: options.provider,
         modelName: options.model,
         configPath: options.config,
-        allowExecute: options.execute !== false,
-        mcpEnabled: options.mcp !== false,
+        allowExecute,
+        mcpEnabled,
         question: questionText,
       });
     } catch (error) {
