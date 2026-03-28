@@ -15,7 +15,7 @@ program
   .option('-m, --model <name>', 'Override model')
   .option('-c, --config <path>', 'Config file path')
   .option('-e, --execute <mode>', 'Set shell command execution: on or off')
-  .option('-x, --mcp <mode>', 'Set MCP servers: on or off')
+  .option('-x, --mcp <mode>', 'Enable / disable MCP servers: on or off')
   .option('-i, --init', 'Create a default config file')
   .action(async (question: string[] | undefined, options) => {
     if (options.init) {

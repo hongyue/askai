@@ -1,6 +1,6 @@
 import { createCliRenderer, Box, Text, ScrollBox, StyledText, TextareaRenderable, fg, h, stringToStyledText, type KeyEvent } from "@opentui/core"
 import { loadConfig } from './config';
-import { MCPManager } from './mcp';
+import { MCPManager, MCPServerState } from './mcp';
 import { createInitialState, createCommands, Command } from './commands';
 import { Message, ToolCall } from './providers/base';
 import { createProviderFromConfig } from './providers';
@@ -25,12 +25,15 @@ interface MutableBoxNode {
   visible: boolean;
   add(obj: unknown, index?: number): number;
   remove(id: string): void;
+  onMouseScroll?: ((event: { scroll?: { direction?: string; delta?: number } }) => void) | undefined;
 }
 
 interface MutableInputNode {
   plainText: string;
+  cursorOffset?: number;
   setText(text: string): void;
   focus(): void;
+  blur?: () => void;
   onContentChange?: (() => void) | undefined;
   onSubmit?: (() => void) | undefined;
 }
@@ -67,21 +70,39 @@ const oneShotFeedbackPrompts = [
 
 const oneShotFeedbackColor = '\x1b[38;5;45m';
 const ansiReset = '\x1b[0m';
+const mcpDetailsModalHeight = 20;
+const mcpDetailsVisibleLineCount = 15;
+const approvalActions = [
+  { key: 'y', label: 'Yes' },
+  { key: 'n', label: 'No' },
+  { key: 'a', label: 'All' },
+  { key: 'x', label: 'None' },
+] as const;
+type ApprovalActionKey = typeof approvalActions[number]['key'];
 
 function getRandomOneShotFeedbackPrompt(): string {
   const index = Math.floor(Math.random() * oneShotFeedbackPrompts.length);
   return oneShotFeedbackPrompts[index];
 }
 
+function isEscapeKey(key: KeyEvent): boolean {
+  return key.name === 'escape'
+    || key.name === 'esc'
+    || key.sequence === '\x1b'
+    || key.raw === '\x1b'
+    || key.code === 'Escape'
+    || key.baseCode === 27;
+}
+
 async function initializeRuntime(options: RunAppOptions): Promise<{
   config: Awaited<ReturnType<typeof loadConfig>>;
   mcpManager: MCPManager | undefined;
-  mcpTools: MCPTool[];
   provider: Awaited<ReturnType<typeof createProviderFromConfig>>;
   systemPrompt: string;
   state: ReturnType<typeof createInitialState>;
   getProviderTools: () => any[];
-  refreshProviderTools: () => void;
+  refreshProviderTools: () => Promise<void>;
+  getMcpServerStates: () => MCPServerState[];
   messages: Message[];
 }> {
   const config = await loadConfig(options.configPath);
@@ -91,10 +112,10 @@ async function initializeRuntime(options: RunAppOptions): Promise<{
   let mcpManager: MCPManager | undefined;
   let mcpTools: MCPTool[] = [];
 
-  if (options.mcpEnabled && config.mcpServers && Object.keys(config.mcpServers).length > 0) {
+  if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
     mcpManager = new MCPManager(config);
     await mcpManager.connectAll();
-    mcpTools = await mcpManager.listAllTools();
+    mcpTools = await mcpManager.listEnabledTools();
   }
 
   const provider = await createProviderFromConfig(config);
@@ -114,7 +135,13 @@ async function initializeRuntime(options: RunAppOptions): Promise<{
   }
 
   let providerTools = convertTools(mcpTools);
-  const refreshProviderTools = () => {
+  const refreshProviderTools = async () => {
+    if (mcpManager) {
+      await mcpManager.refreshTools();
+      mcpTools = await mcpManager.listEnabledTools();
+    } else {
+      mcpTools = [];
+    }
     providerTools = state.mcpEnabled ? convertTools(mcpTools) : [];
   };
 
@@ -123,12 +150,12 @@ async function initializeRuntime(options: RunAppOptions): Promise<{
   return {
     config,
     mcpManager,
-    mcpTools,
     provider,
     systemPrompt,
     state,
     getProviderTools: () => providerTools,
     refreshProviderTools,
+    getMcpServerStates: () => mcpManager ? mcpManager.listServerStates() : [],
     messages,
   };
 }
@@ -146,6 +173,13 @@ function formatToolContent(content: Array<{ type: string; text?: string; data?: 
     })
     .join('\n')
     .trim();
+}
+
+function formatApprovalDialogCommand(block: CommandBlock): string {
+  return block.code
+    .split('\n')
+    .map(line => `$ ${line}`)
+    .join('\n');
 }
 
 async function getAssistantResponse(
@@ -255,16 +289,152 @@ export async function runOneShotApp(options: RunAppOptions & { question: string 
 
 export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const runtime = await initializeRuntime(options);
-  const { provider, mcpManager, mcpTools, state, messages } = runtime;
+  const { provider, mcpManager, state, messages } = runtime;
   let providerTools = runtime.getProviderTools();
-  const commands = createCommands(state, () => {
-    runtime.refreshProviderTools();
-    providerTools = runtime.getProviderTools();
-  });
+  let mcpModalOpen = false;
+  let mcpDetailsOpen = false;
+  let mcpServerIndex = 0;
+  let mcpDetailsScrollOffset = 0;
+  let mcpFocus: 'server' | 'global' = 'server';
+  const commands = createCommands(
+    state,
+    () => {
+      void runtime.refreshProviderTools().then(() => {
+        providerTools = runtime.getProviderTools();
+      });
+      if (!state.mcpEnabled) {
+        providerTools = [];
+      }
+    },
+    () => {
+      while (chatNodeIds.length > 0) {
+        const nodeId = chatNodeIds.pop();
+        if (nodeId) {
+          chatNode.remove(nodeId);
+        }
+      }
+      root.requestRender();
+    },
+    () => {
+      mcpModalOpen = true;
+      mcpFocus = 'server';
+      renderMcpModal();
+    },
+  );
   
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
     useAlternateScreen: true,
+    useKittyKeyboard: {
+      disambiguate: true,
+    },
+  });
+
+  renderer.prependInputHandler((sequence: string) => {
+    if (mcpDetailsOpen) {
+      const states = runtime.getMcpServerStates();
+      const selectedState = states[mcpServerIndex];
+      const detailLineCount = getMcpDetailsContentLines(selectedState).length;
+      const maxOffset = Math.max(0, detailLineCount - mcpDetailsVisibleLineCount);
+
+      if (sequence === '\x1b' || sequence.toLowerCase() === 'q') {
+        closeMcpDetailsModal();
+        return true;
+      }
+      if (sequence === '\x1b[A') {
+        mcpDetailsScrollOffset = Math.max(0, mcpDetailsScrollOffset - 1);
+        renderMcpDetailsModal();
+        return true;
+      }
+      if (sequence === '\x1b[B') {
+        mcpDetailsScrollOffset = Math.min(maxOffset, mcpDetailsScrollOffset + 1);
+        renderMcpDetailsModal();
+        return true;
+      }
+      if (sequence === '\x1b[5~') {
+        mcpDetailsScrollOffset = Math.max(0, mcpDetailsScrollOffset - 8);
+        renderMcpDetailsModal();
+        return true;
+      }
+      if (sequence === '\x1b[6~') {
+        mcpDetailsScrollOffset = Math.min(maxOffset, mcpDetailsScrollOffset + 8);
+        renderMcpDetailsModal();
+        return true;
+      }
+      if (sequence.length > 0) {
+        return true;
+      }
+    }
+
+    if (mcpModalOpen) {
+      if (sequence === '\x1b' || sequence.toLowerCase() === 'q') {
+        closeMcpModal();
+        return true;
+      }
+      if (sequence === '\x1b[A') {
+        const states = runtime.getMcpServerStates();
+        if (states.length > 0) {
+          mcpServerIndex = (mcpServerIndex + states.length - 1) % states.length;
+          renderMcpModal();
+        }
+        return true;
+      }
+      if (sequence === '\x1b[B') {
+        const states = runtime.getMcpServerStates();
+        if (states.length > 0) {
+          mcpServerIndex = (mcpServerIndex + 1) % states.length;
+          renderMcpModal();
+        }
+        return true;
+      }
+      if (sequence === '\t') {
+        mcpFocus = mcpFocus === 'server' ? 'global' : 'server';
+        renderMcpModal();
+        return true;
+      }
+      if (sequence === ' ') {
+        void runMcpModalToggle();
+        return true;
+      }
+      if (sequence === '\r' || sequence === '\n') {
+        if (mcpFocus === 'server') {
+          openMcpDetailsModal();
+        }
+        return true;
+      }
+      if (sequence.length > 0) {
+        return true;
+      }
+    }
+
+    if (!pendingExecution) {
+      return false;
+    }
+
+    const lower = sequence.toLowerCase();
+    if (lower === 'y' || lower === 'n' || lower === 'a' || lower === 'x') {
+      void handleExecutionApproval(lower as ApprovalActionKey);
+      return true;
+    }
+    if (sequence === '\x1b[D') {
+      approvalSelectionIndex = (approvalSelectionIndex + approvalActions.length - 1) % approvalActions.length;
+      renderApprovalDialog();
+      return true;
+    }
+    if (sequence === '\x1b[C') {
+      approvalSelectionIndex = (approvalSelectionIndex + 1) % approvalActions.length;
+      renderApprovalDialog();
+      return true;
+    }
+    if (sequence === '\r' || sequence === '\n') {
+      void handleExecutionApproval(approvalActions[approvalSelectionIndex].key);
+      return true;
+    }
+    if (sequence.length > 0) {
+      return true;
+    }
+
+    return false;
   });
   
   let isProcessing = false;
@@ -276,6 +446,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     matches: [...commands],
   };
   let pendingExecution: PendingExecution | null = null;
+  let approvalDraftText = '';
+  let approvalDraftCursorOffset = 0;
+  let approvalSelectionIndex = 0;
+  let approvalActionInFlight = false;
   
   const root = Box({ width: '100%', height: '100%', flexDirection: 'column' });
   root.add(Text({ content: ` Welcome to askai! (${provider.name} / ${provider.model})`, fg: '#00d4ff' }));
@@ -303,6 +477,63 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   });
   const cmdListText = Text({ id: 'command-palette', content: stringToStyledText(''), fg: '#888888' });
   cmdListBox.add(cmdListText);
+
+  const approvalDialog = Box({
+    id: 'approval-dialog',
+    position: 'absolute',
+    width: '70%',
+    left: '15%',
+    top: '35%',
+    height: 'auto',
+    flexDirection: 'column',
+    visible: false,
+    backgroundColor: '#1b1b1b',
+    padding: 1,
+  });
+  const approvalDialogText = Text({
+    id: 'approval-dialog-text',
+    content: stringToStyledText(''),
+    fg: '#ffaa00',
+  });
+  approvalDialog.add(approvalDialogText);
+
+  const mcpModal = Box({
+    id: 'mcp-modal',
+    position: 'absolute',
+    width: '78%',
+    left: '11%',
+    top: '18%',
+    height: 'auto',
+    flexDirection: 'column',
+    visible: false,
+    backgroundColor: '#161616',
+    padding: 1,
+  });
+  const mcpModalText = Text({
+    id: 'mcp-modal-text',
+    content: stringToStyledText(''),
+    fg: '#cfcfcf',
+  });
+  mcpModal.add(mcpModalText);
+
+  const mcpDetailsModal = Box({
+    id: 'mcp-details-modal',
+    position: 'absolute',
+    width: '74%',
+    left: '13%',
+    top: '22%',
+    height: mcpDetailsModalHeight,
+    flexDirection: 'column',
+    visible: false,
+    backgroundColor: '#101010',
+    padding: 1,
+  });
+  const mcpDetailsModalText = Text({
+    id: 'mcp-details-modal-text',
+    content: stringToStyledText(''),
+    fg: '#d8d8d8',
+  });
+  mcpDetailsModal.add(mcpDetailsModalText);
   
   const inputRow = Box({
     id: 'input-row',
@@ -335,14 +566,23 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   inputRow.add(input);
   root.add(inputRow);
   root.add(cmdListBox);
+  root.add(approvalDialog);
+  root.add(mcpModal);
+  root.add(mcpDetailsModal);
   renderer.root.add(root);
 
   const liveCmdListBox = renderer.root.findDescendantById('cmd-list-box') as MutableBoxNode | undefined;
   const liveCmdListText = renderer.root.findDescendantById('command-palette') as MutableTextNode | undefined;
   const liveInput = renderer.root.findDescendantById('main-input') as MutableInputNode | undefined;
   const liveChat = renderer.root.findDescendantById('chat-box') as MutableBoxNode | undefined;
+  const liveApprovalDialog = renderer.root.findDescendantById('approval-dialog') as MutableBoxNode | undefined;
+  const liveApprovalDialogText = renderer.root.findDescendantById('approval-dialog-text') as MutableTextNode | undefined;
+  const liveMcpModal = renderer.root.findDescendantById('mcp-modal') as MutableBoxNode | undefined;
+  const liveMcpModalText = renderer.root.findDescendantById('mcp-modal-text') as MutableTextNode | undefined;
+  const liveMcpDetailsModal = renderer.root.findDescendantById('mcp-details-modal') as MutableBoxNode | undefined;
+  const liveMcpDetailsModalText = renderer.root.findDescendantById('mcp-details-modal-text') as MutableTextNode | undefined;
 
-  if (!liveCmdListBox || !liveCmdListText || !liveInput || !liveChat) {
+  if (!liveCmdListBox || !liveCmdListText || !liveInput || !liveChat || !liveApprovalDialog || !liveApprovalDialogText || !liveMcpModal || !liveMcpModalText || !liveMcpDetailsModal || !liveMcpDetailsModalText) {
     throw new Error('Failed to initialize TUI render tree');
   }
 
@@ -350,13 +590,275 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const cmdListTextNode = liveCmdListText;
   const inputNode = liveInput;
   const chatNode = liveChat;
+  const approvalDialogNode = liveApprovalDialog;
+  const approvalDialogTextNode = liveApprovalDialogText;
+  const mcpModalNode = liveMcpModal;
+  const mcpModalTextNode = liveMcpModalText;
+  const mcpDetailsModalNode = liveMcpDetailsModal;
+  const mcpDetailsModalTextNode = liveMcpDetailsModalText;
 
   function updateFooterLayout() {
     const paletteHeight = palette.open ? Math.min(palette.matches.length, 5) : 0;
     cmdListBoxNode.height = paletteHeight;
     root.requestRender();
   }
-  
+
+  function restoreApprovalDraft(): void {
+    if (inputNode.plainText !== approvalDraftText) {
+      inputNode.setText(approvalDraftText);
+    }
+    if (typeof inputNode.cursorOffset === 'number') {
+      inputNode.cursorOffset = Math.max(0, Math.min(approvalDraftCursorOffset, approvalDraftText.length));
+    }
+    inputBuffer = approvalDraftText;
+    inputNode.focus();
+  }
+
+  function hideApprovalDialog(): void {
+    approvalDialogNode.visible = false;
+    approvalDialogTextNode.content = stringToStyledText('');
+    root.requestRender();
+    inputNode.focus();
+  }
+
+  function closeMcpModal(): void {
+    mcpModalOpen = false;
+    closeMcpDetailsModal();
+    mcpModalNode.visible = false;
+    mcpModalTextNode.content = stringToStyledText('');
+    root.requestRender();
+    inputNode.focus();
+  }
+
+  function closeMcpDetailsModal(): void {
+    mcpDetailsOpen = false;
+    mcpDetailsScrollOffset = 0;
+    mcpDetailsModalNode.visible = false;
+    mcpDetailsModalTextNode.content = stringToStyledText('');
+    root.requestRender();
+    if (!mcpModalOpen) {
+      inputNode.focus();
+    }
+  }
+
+  function getMcpGlobalToggleLine(): string {
+    const label = state.mcpEnabled ? 'MCP Servers Enabled' : 'MCP Servers Disabled';
+    return mcpFocus === 'global' ? `[ ${label} ]` : `  ${label}  `;
+  }
+
+  function renderMcpModal(): void {
+    if (!mcpModalOpen) {
+      closeMcpModal();
+      return;
+    }
+
+    const states = runtime.getMcpServerStates();
+    if (states.length === 0) {
+      mcpModalTextNode.content = stringToStyledText('MCP\n\nNo MCP servers configured.\n\nEsc/q close');
+      mcpModalNode.visible = true;
+      root.requestRender();
+      return;
+    }
+
+    mcpServerIndex = Math.max(0, Math.min(mcpServerIndex, states.length - 1));
+    const selectedState = states[mcpServerIndex];
+    const summaryLines = [
+      `Selected: ${selectedState.name}`,
+      `${selectedState.transport} • ${selectedState.connected ? 'connected' : 'disconnected'} • ${selectedState.enabled ? 'enabled' : 'disabled'}`,
+      `Target: ${selectedState.target || 'n/a'}`,
+      `Tools: ${selectedState.toolCount}`,
+      selectedState.lastError ? `Last error: ${selectedState.lastError}` : '',
+      '',
+      `Space: ${selectedState.enabled ? 'disable' : 'enable'} selected server`,
+    ].filter(Boolean).join('\n');
+
+    const header = stringToStyledText('MCP Servers\n\n');
+    const serverChunks = states.flatMap((server, index) => {
+      const marker = index === mcpServerIndex ? '>' : ' ';
+      const enabled = server.enabled ? 'enabled ' : 'disabled';
+      const connected = server.connected ? 'connected   ' : 'disconnected';
+      const line = `${marker} ${server.name.padEnd(16)} ${connected} ${enabled} ${String(server.toolCount).padStart(2)} tools`;
+      const isFocused = mcpFocus === 'server' && index === mcpServerIndex;
+      const chunk = isFocused ? fg('#00d4ff')(line) : fg('#a8a8a8')(line);
+      return index < states.length - 1 ? [chunk, fg('#a8a8a8')('\n')] : [chunk];
+    });
+    const rest = stringToStyledText([
+      '',
+      '',
+      'Summary',
+      summaryLines,
+      '',
+      getMcpGlobalToggleLine(),
+      '',
+      '↑/↓ select server   Tab switch focus   Space toggle   Enter details   Esc/q close',
+    ].join('\n'));
+    mcpModalTextNode.content = new StyledText([
+      ...header.chunks,
+      ...serverChunks,
+      ...rest.chunks,
+    ]);
+    mcpModalNode.visible = true;
+    if (inputNode.blur) {
+      inputNode.blur();
+    }
+    root.requestRender();
+  }
+
+  function renderMcpDetailsModal(): void {
+    if (!mcpDetailsOpen) {
+      closeMcpDetailsModal();
+      return;
+    }
+
+    const states = runtime.getMcpServerStates();
+    const selectedState = states[mcpServerIndex];
+    if (!selectedState) {
+      closeMcpDetailsModal();
+      return;
+    }
+
+    const allLines = getMcpDetailsContentLines(selectedState);
+    const visibleLineCount = mcpDetailsVisibleLineCount;
+    const maxOffset = Math.max(0, allLines.length - visibleLineCount);
+    mcpDetailsScrollOffset = Math.max(0, Math.min(mcpDetailsScrollOffset, maxOffset));
+    const visibleLines = allLines.slice(mcpDetailsScrollOffset, mcpDetailsScrollOffset + visibleLineCount);
+    const content = [
+      ...visibleLines,
+      '',
+      `Scroll ${mcpDetailsScrollOffset + 1}-${Math.min(mcpDetailsScrollOffset + visibleLines.length, allLines.length)} / ${allLines.length}`,
+      '↑/↓ scroll   PgUp/PgDn jump   Esc/q close',
+    ].join('\n');
+
+    mcpDetailsModalTextNode.content = stringToStyledText(content);
+    mcpDetailsModalNode.visible = true;
+    if (inputNode.blur) {
+      inputNode.blur();
+    }
+    root.requestRender();
+  }
+
+  function openMcpDetailsModal(): void {
+    mcpDetailsOpen = true;
+    mcpDetailsScrollOffset = 0;
+    renderMcpDetailsModal();
+  }
+
+  function getMcpDetailsContentLines(selectedState?: MCPServerState): string[] {
+    if (!selectedState) {
+      return ['No server selected.'];
+    }
+
+    const wrapLines = (text: string, width = 58, indent = ''): string[] => {
+      if (!text) {
+        return [''];
+      }
+
+      const words = text.split(/\s+/);
+      const lines: string[] = [];
+      let current = '';
+
+      for (const word of words) {
+        const candidate = current ? `${current} ${word}` : word;
+        if ((indent + candidate).length > width && current) {
+          lines.push(`${indent}${current}`);
+          current = word;
+        } else {
+          current = candidate;
+        }
+      }
+
+      if (current) {
+        lines.push(`${indent}${current}`);
+      }
+
+      return lines.length > 0 ? lines : [''];
+    };
+
+    const infoLines = [
+      ...wrapLines(`Transport: ${selectedState.transport}`),
+      ...wrapLines(`Target: ${selectedState.target || 'n/a'}`),
+      ...wrapLines(`Status: ${selectedState.connected ? 'connected' : 'disconnected'}`),
+      ...wrapLines(`Usage: ${selectedState.enabled ? 'enabled' : 'disabled'}`),
+      ...wrapLines(`Tools: ${selectedState.toolCount}`),
+      ...(selectedState.lastError ? wrapLines(`Last error: ${selectedState.lastError}`) : []),
+    ];
+
+    const toolLines = selectedState.tools.length > 0
+      ? selectedState.tools.flatMap(tool => {
+          const lines = wrapLines(`- ${tool.name}`);
+          if (tool.description) {
+            lines.push(...wrapLines(tool.description, 58, '  '));
+          }
+          return lines;
+        })
+      : ['- No tools discovered'];
+
+    return [
+      `${selectedState.name} Details`,
+      '',
+      ...infoLines,
+      '',
+      'Provided Tools',
+      ...toolLines,
+    ];
+  }
+
+  mcpDetailsModalNode.onMouseScroll = (event) => {
+    if (!mcpDetailsOpen) {
+      return;
+    }
+
+    const states = runtime.getMcpServerStates();
+    const selectedState = states[mcpServerIndex];
+    const allLines = getMcpDetailsContentLines(selectedState);
+    const visibleLineCount = mcpDetailsVisibleLineCount;
+    const maxOffset = Math.max(0, allLines.length - visibleLineCount);
+    const delta = Math.max(1, event.scroll?.delta ?? 1);
+
+    if (event.scroll?.direction === 'up') {
+      mcpDetailsScrollOffset = Math.max(0, mcpDetailsScrollOffset - delta);
+      renderMcpDetailsModal();
+    } else if (event.scroll?.direction === 'down') {
+      mcpDetailsScrollOffset = Math.min(maxOffset, mcpDetailsScrollOffset + delta);
+      renderMcpDetailsModal();
+    }
+  };
+
+  async function runMcpModalToggle(): Promise<void> {
+    if (!mcpManager) {
+      closeMcpModal();
+      return;
+    }
+
+    const states = runtime.getMcpServerStates();
+    const selectedState = states[mcpServerIndex];
+    if (!selectedState) {
+      return;
+    }
+
+    if (mcpFocus === 'server') {
+      mcpManager.setServerEnabled(selectedState.name, !selectedState.enabled);
+    } else {
+      state.mcpEnabled = !state.mcpEnabled;
+    }
+
+    await runtime.refreshProviderTools();
+    providerTools = runtime.getProviderTools();
+    renderMcpModal();
+  }
+
+  function getApprovalActionsLine(): string {
+    const line = approvalActions
+      .map((action, index) => {
+        const label = `${action.key.toUpperCase()}: ${action.label}`;
+        return index === approvalSelectionIndex ? `[ ${label} ]` : `  ${label}  `;
+      })
+      .join('   ');
+    const dialogWidth = 54;
+    const padding = Math.max(0, Math.floor((dialogWidth - line.length) / 2));
+    return `${' '.repeat(padding)}${line}`;
+  }
+
   function addMsg(text: string, color = '#ffffff') {
     const nodeId = `chat-${chatNodeIds.length}-${Date.now()}`;
     const node = Text({ id: nodeId, content: text, fg: color });
@@ -458,8 +960,9 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     return ['x', 'none', 'no-all', 'reject-all'].includes(normalized);
   }
 
-  function promptPendingExecution(): void {
+  function renderApprovalDialog(): void {
     if (!pendingExecution) {
+      hideApprovalDialog();
       return;
     }
 
@@ -468,11 +971,23 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       ? ` (${pendingExecution.index + 1}/${pendingExecution.blocks.length})`
       : '';
 
-    addMsg(`Shell command detected${ordinal}:`, '#ffaa00');
-    for (const line of formatCommandBlock(block).split('\n')) {
-      addMsg(line, '#ffaa00');
+    approvalDialogTextNode.content = stringToStyledText(
+      `Shell command detected${ordinal}\n\n${formatApprovalDialogCommand(block)}\n\n${getApprovalActionsLine()}\n\nUse left/right to choose, Enter to confirm`
+    );
+    approvalDialogNode.visible = true;
+    if (inputNode.blur) {
+      inputNode.blur();
     }
-    addMsg('Allow execution? [y]es / [n]o / [a]ll / [x] none', '#ffaa00');
+    root.requestRender();
+  }
+
+  function promptPendingExecution(resetSelection = true): void {
+    approvalDraftText = inputNode.plainText;
+    approvalDraftCursorOffset = typeof inputNode.cursorOffset === 'number' ? inputNode.cursorOffset : approvalDraftText.length;
+    if (resetSelection) {
+      approvalSelectionIndex = 0;
+    }
+    renderApprovalDialog();
   }
 
   async function runCommandBlock(block: CommandBlock): Promise<void> {
@@ -493,51 +1008,65 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       : null;
   }
 
-  async function handleExecutionApproval(text: string): Promise<void> {
-    if (!pendingExecution) {
+  async function handleExecutionApproval(action: ApprovalActionKey): Promise<void> {
+    if (!pendingExecution || approvalActionInFlight) {
       return;
     }
+    approvalActionInFlight = true;
 
-    if (isAllowAllAnswer(text)) {
-      const remainingCount = pendingExecution.blocks.length - pendingExecution.index;
-      addMsg(`Executing ${remainingCount} command${remainingCount === 1 ? '' : 's'}.`, '#888888');
-      while (pendingExecution) {
+    try {
+      if (action === 'a') {
+        hideApprovalDialog();
+        addMsg('Executing remaining commands.', '#888888');
+        while (pendingExecution) {
+          const block = pendingExecution.blocks[pendingExecution.index];
+          await runCommandBlock(block);
+          advancePendingExecution();
+        }
+        restoreApprovalDraft();
+        return;
+      }
+
+      if (action === 'x') {
+        hideApprovalDialog();
+        addMsg('Skipped remaining commands.', '#888888');
+        pendingExecution = null;
+        restoreApprovalDraft();
+        return;
+      }
+
+      if (action === 'y') {
+        hideApprovalDialog();
         const block = pendingExecution.blocks[pendingExecution.index];
         await runCommandBlock(block);
         advancePendingExecution();
+        if (pendingExecution) {
+          restoreApprovalDraft();
+          promptPendingExecution();
+        } else {
+          restoreApprovalDraft();
+        }
+        return;
       }
-      return;
-    }
 
-    if (isRejectAllAnswer(text)) {
-      const remainingBlocks = pendingExecution.blocks.slice(pendingExecution.index);
-      const skippedCount = remainingBlocks.length;
-      addMsg(`Skipped ${skippedCount} command${skippedCount === 1 ? '' : 's'}.`, '#888888');
-      pendingExecution = null;
-      return;
-    }
-
-    if (isAffirmativeAnswer(text)) {
-      const block = pendingExecution.blocks[pendingExecution.index];
-      await runCommandBlock(block);
-      advancePendingExecution();
+      if (action === 'n') {
+        hideApprovalDialog();
+        addMsg('Skipped command execution.', '#888888');
+        advancePendingExecution();
+        if (pendingExecution) {
+          restoreApprovalDraft();
+          promptPendingExecution();
+        } else {
+          restoreApprovalDraft();
+        }
+        return;
+      }
+    } finally {
+      approvalActionInFlight = false;
       if (pendingExecution) {
-        promptPendingExecution();
+        restoreApprovalDraft();
       }
-      return;
     }
-
-    if (isNegativeAnswer(text)) {
-      addMsg('Skipped command execution.', '#888888');
-      advancePendingExecution();
-      if (pendingExecution) {
-        promptPendingExecution();
-      }
-      return;
-    }
-
-    addMsg('Reply with y/n/a/x: yes, no, allow all, or reject all.', '#ffaa00');
-    promptPendingExecution();
   }
 
   async function maybeQueueCommandExecution(response: string): Promise<void> {
@@ -596,7 +1125,6 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     if (isProcessing) return;
 
     if (pendingExecution) {
-      await handleExecutionApproval(text);
       return;
     }
 
@@ -739,10 +1267,26 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   }
 
   inputNode.onContentChange = () => {
+    if (mcpModalOpen) {
+      return;
+    }
+    if (pendingExecution) {
+      if (inputNode.plainText !== approvalDraftText) {
+        inputNode.setText(approvalDraftText);
+      }
+      inputBuffer = approvalDraftText;
+      return;
+    }
     syncCommandPalette(inputNode.plainText);
   };
 
   inputNode.onSubmit = async () => {
+    if (mcpModalOpen) {
+      return;
+    }
+    if (pendingExecution) {
+      return;
+    }
     await submitCurrentInput();
   };
   
@@ -754,17 +1298,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       process.exit(0);
     }
 
+    if (mcpDetailsOpen && isEscapeKey(key)) {
+      closeMcpDetailsModal();
+      return;
+    }
+
+    if (mcpModalOpen && isEscapeKey(key)) {
+      closeMcpModal();
+      return;
+    }
+
+    if (mcpModalOpen && !key.ctrl && !key.meta) {
+      return;
+    }
+
     if (pendingExecution && !key.ctrl && !key.meta) {
-      const approvalChar = (
-        (key.sequence && key.sequence.length === 1 ? key.sequence : key.name) || ''
-      ).toLowerCase();
-      if (['y', 'n', 'a', 'x'].includes(approvalChar)) {
-        await handleExecutionApproval(approvalChar);
-        inputNode.setText('');
-        inputBuffer = '';
-        inputNode.focus();
-        return;
-      }
+      return;
     }
 
     applyKeyToBuffer(key);

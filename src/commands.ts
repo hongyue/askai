@@ -16,10 +16,15 @@ export function createInitialState(allowExecute: boolean, mcpEnabled: boolean): 
   };
 }
 
-export function createCommands(state: SessionState, onStateChange: () => void): Command[] {
+export function createCommands(
+  state: SessionState,
+  onStateChange: () => void,
+  onClear?: () => void,
+  onOpenMcpModal?: () => void,
+): Command[] {
   return [
     {
-      name: 'toggle-execute',
+      name: 'shell-execute',
       description: 'Toggle shell command execution',
       action: () => {
         state.allowExecute = !state.allowExecute;
@@ -29,29 +34,23 @@ export function createCommands(state: SessionState, onStateChange: () => void): 
       },
     },
     {
-      name: 'toggle-mcp',
-      description: 'Toggle MCP tools',
+      name: 'mcp',
+      description: 'Manage the MCP servers',
       action: () => {
-        state.mcpEnabled = !state.mcpEnabled;
-        const status = state.mcpEnabled ? 'enabled' : 'disabled';
-        onStateChange();
-        return `MCP tools: ${status}`;
+        onOpenMcpModal?.();
+        return 'Opened the MCP servers manager';
       },
     },
     {
-      name: 'help',
-      description: 'Show available commands',
+      name: 'clear',
+      description: 'Clear the screen',
       action: () => {
-        return `Available commands:
-  /toggle-execute - Toggle shell command execution
-  /toggle-mcp - Toggle MCP tools
-  /help - Show available commands
-  /exit - Exit interactive mode`;
+        onClear?.();
       },
     },
     {
       name: 'exit',
-      description: 'Exit interactive mode',
+      description: 'Exit the application',
       action: () => {
         // This is handled specially in the app
       },

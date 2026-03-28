@@ -93,23 +93,26 @@ try {
 -m, --model <name>       # Override model
 -c, --config <path>      # Config file path
 -e, --execute <mode>     # Set shell command execution: on or off
--x, --mcp <mode>         # Set MCP servers: on or off
+-x, --mcp <mode>         # Enable / disable MCP servers: on or off
 -i, --init               # Create default config
 ```
 
 ## Configuration
 
-Config location: `~/.askai/config.json`
+Config location: `~/.askai/settings.json`
 
 ```json
 {
-  "provider": "llama",
+  "provider": "llama.cpp",
   "providers": {
-    "llama": { "api_key": "...", "model": "...", "base_url": "..." },
+    "llama.cpp": { "api_key": "...", "model": "...", "base_url": "..." },
     "openai": { "api_key": "...", "model": "gpt-4o" },
     "anthropic": { "api_key": "...", "model": "claude-sonnet-4-20250514" }
   },
   "allowExecute": true,
+  "mcp": {
+    "autoExecute": false
+  },
   "mcpServers": {
     "server-name": { "command": "npx", "args": [...] }
   }

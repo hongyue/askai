@@ -12,7 +12,8 @@ export async function createProviderFromConfig(config: Config): Promise<Provider
 
   switch (config.provider) {
     case 'openai':
-    case 'llama':
+    case 'openrouter':
+    case 'llama.cpp':
     case 'ollama':
       return new OpenAIProvider(providerConfig, config.provider);
     case 'anthropic':

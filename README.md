@@ -4,7 +4,7 @@ A terminal AI agent that answers your questions with streaming responses and she
 
 ## Features
 
-- **Multiple Providers**: OpenAI, Anthropic (Claude), Ollama, llama.cpp (OpenAI-compatible)
+- **Multiple Providers**: OpenAI, OpenRouter, Anthropic (Claude), Ollama, llama.cpp (OpenAI-compatible)
 - **MCP Support**: Connect to MCP servers for extended tools
 - **Terminal UI**: Interactive TUI with command palette and oneshot queries
 - **Streaming**: Real-time response streaming
@@ -76,7 +76,7 @@ askai "what is 2+2?"
 
 ## Configuration
 
-Create a config file at `~/.askai/config.json`:
+Create a settings file at `~/.askai/settings.json`:
 
 ```bash
 askai --init
@@ -86,10 +86,10 @@ Or manually create it:
 
 ```json
 {
-  "provider": "llama",
+  "provider": "llama.cpp",
   "providers": {
-    "llama": {
-      "api_key": "llama",
+    "llama.cpp": {
+      "api_key": "optional",
       "model": "your-model-name",
       "base_url": "http://localhost:8080/v1"
     },
@@ -97,6 +97,11 @@ Or manually create it:
       "api_key": "sk-your-key",
       "model": "gpt-4o",
       "base_url": "https://api.openai.com/v1"
+    },
+    "openrouter": {
+      "api_key": "sk-or-your-key",
+      "model": "openai/gpt-4o-mini",
+      "base_url": "https://openrouter.ai/api/v1"
     },
     "anthropic": {
       "api_key": "sk-ant-your-key",
@@ -141,7 +146,7 @@ Options:
   -m, --model <name>     Override model
   -c, --config <path>    Config file path
   -e, --execute <mode>   Set shell command execution: on or off
-  -x, --mcp <mode>       Set MCP servers: on or off
+  -x, --mcp <mode>       Enable / disable MCP servers: on or off
   -i, --init             Create default config file
 ```
 
@@ -150,6 +155,12 @@ Options:
 ```bash
 # Use OpenAI provider
 askai -p openai explain quantum computing
+
+# Use OpenRouter provider
+askai -p openrouter explain quantum computing
+
+# Use llama.cpp-compatible server
+askai -p llama.cpp local coding help
 
 # Use specific model
 askai -m gpt-4o-mini quick question
@@ -160,14 +171,14 @@ askai --execute off how do I list files
 # Enable command execution
 askai --execute on how do I list files
 
-# Disable MCP
+# Disable global MCP usage
 askai --mcp off what is 2+2
 
-# Enable MCP
+# Enable global MCP usage
 askai --mcp on what is 2+2
 
 # Use custom config
-askai -c ./my-config.json hello
+askai -c ./my-settings.json hello
 ```
 
 ## Shell Command Execution

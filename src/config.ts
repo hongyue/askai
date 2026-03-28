@@ -31,7 +31,7 @@ export interface Config {
   };
 }
 
-const DEFAULT_CONFIG_PATH = join(homedir(), '.askai', 'config.json');
+const DEFAULT_CONFIG_PATH = join(homedir(), '.askai', 'settings.json');
 
 const DEFAULT_SYSTEM_PROMPT = `You are a helpful terminal assistant. When suggesting shell commands, use bash code blocks. Explain what commands do before suggesting them. Be concise.`;
 
@@ -99,21 +99,28 @@ export async function createDefaultConfig(configPath?: string): Promise<void> {
   
   // Create directory if it doesn't exist
   await Bun.write(join(dir, '.keep'), '');
-  
-  const defaultConfig: Config = {
-    provider: 'llama',
+
+  const exampleConfigPath = join(import.meta.dir, '..', 'settings.json.example');
+  const exampleConfigFile = Bun.file(exampleConfigPath);
+  if (await exampleConfigFile.exists()) {
+    await Bun.write(path, await exampleConfigFile.text());
+    return;
+  }
+
+  const fallbackConfig: Config = {
+    provider: 'llama.cpp',
     providers: {
-      llama: {
-        api_key: 'llama',
-        model: 'Qwen3.5-35B-A3B-Q4_K_M',
-        base_url: 'http://172.17.0.21:8080/v1'
-      }
+      'llama.cpp': {
+        api_key: 'optional',
+        model: 'model',
+        base_url: 'http://localhost:8080/v1',
+      },
     },
     allowExecute: true,
     mcp: {
-      autoExecute: false
-    }
+      autoExecute: false,
+    },
   };
-  
-  await Bun.write(path, JSON.stringify(defaultConfig, null, 2));
+
+  await Bun.write(path, JSON.stringify(fallbackConfig, null, 2));
 }
