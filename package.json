@@ -1,17 +1,7 @@
 {
   "name": "askai",
   "version": "0.1.0",
-  "description": "A terminal AI agent that answers your questions",
-  "type": "module",
   "main": "src/index.ts",
-  "bin": {
-    "askai": "src/index.ts"
-  },
-  "scripts": {
-    "start": "bun run src/index.ts",
-    "build": "bun build ./src/index.ts --compile --outfile askai",
-    "dev": "bun --watch src/index.ts"
-  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.9",
     "@modelcontextprotocol/sdk": "^1.28.0",
@@ -25,10 +15,14 @@
     "@types/bun": "latest",
     "@types/inquirer": "^9.0.9"
   },
-  "optionalDependencies": {
-    "@opentui/core-darwin-arm64": "^0.1.92",
-    "@opentui/core-darwin-x64": "^0.1.92",
-    "@opentui/core-linux-arm64": "^0.1.92",
-    "@opentui/core-linux-x64": "^0.1.92"
-  }
+  "bin": {
+    "askai": "src/index.ts"
+  },
+  "description": "A terminal AI agent that answers your questions",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "build": "bun build ./src/index.ts --compile --outfile askai",
+    "dev": "bun --watch src/index.ts"
+  },
+  "type": "module"
 }

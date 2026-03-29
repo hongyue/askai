@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: write
-  
+
 jobs:
   build:
     strategy:
@@ -16,10 +16,10 @@ jobs:
           - os: ubuntu-latest
             target: bun-linux-x64
             asset: askai-linux-x64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             target: bun-linux-arm64
             asset: askai-linux-arm64
-          - os: macos-latest
+          - os: macos-26-intel
             target: bun-darwin-x64
             asset: askai-darwin-x64
           - os: macos-latest
