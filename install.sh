@@ -190,11 +190,6 @@ else
                     ;;
                 *) log_error "Unknown archive: $FILE_NAME";;
             esac
-            
-            SUBDIR=$(find "$WORK_DIR" -maxdepth 1 -type d | grep -v "askai-work$" | head -n 1)
-            if [[ -n "$SUBDIR" ]]; then 
-                cp "$SUBDIR/*" "$WORK_DIR/"
-            fi
         else
             # Fallback: Download source code
             echo "⚠️ No pre-built binary found. Downloading source..."
