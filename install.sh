@@ -210,7 +210,7 @@ else
             ensure_bun
             (bun install --frozen-lockfile && bun run build)
 
-            cp "$BINARY_NAME" "$WORK_DIR/$BINARY_NAME" 2>/dev/null || \
+            cp "$BINARY_NAME" "$WORK_DIR/$BINARY_NAME" 2>/dev/null
             cp "$DEFAULT_SETTINGS_FILE" "$WORK_DIR/$DEFAULT_SETTINGS_FILE" 2>/dev/null
         fi
     fi
