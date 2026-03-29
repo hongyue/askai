@@ -4,19 +4,10 @@ A terminal AI agent that answers your questions with streaming responses and she
 
 ## Installation
 
-### Quick Install (Recommended)
-
-Download and unpack a prebuilt release bundle from GitHub Releases then run:
+### Install
 
 ```bash
-./install.sh
-```
-
-You can also install directly from source with one command:
-
-```bash
-# Clone the repo, then run:
-./install.sh
+curl -fsSL https://github.com/hongyue/askai/raw/refs/heads/main/install.sh | bash
 ```
 
 ## Usage
