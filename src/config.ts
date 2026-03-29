@@ -41,7 +41,10 @@ export async function loadConfig(configPath?: string): Promise<Config> {
   try {
     const file = Bun.file(path);
     if (!(await file.exists())) {
-      throw new Error(`Config file not found: ${path}\nRun 'askai init' to create a default config.`);
+      throw new Error(
+        `Settings file not found: ${path}\n` +
+        `Provide a settings file at this path, copy the bundled template, or use --config <path>.`
+      );
     }
     
     const config = await file.json();
@@ -52,6 +55,10 @@ export async function loadConfig(configPath?: string): Promise<Config> {
     }
     throw error;
   }
+}
+
+export function resolveConfigPath(configPath?: string): string {
+  return configPath || DEFAULT_CONFIG_PATH;
 }
 
 function validateConfig(config: unknown): Config {
@@ -91,36 +98,4 @@ function validateConfig(config: unknown): Config {
     mcp: cfg.mcp as Config['mcp'],
     mcpServers: cfg.mcpServers as Config['mcpServers'],
   };
-}
-
-export async function createDefaultConfig(configPath?: string): Promise<void> {
-  const path = configPath || DEFAULT_CONFIG_PATH;
-  const dir = path.substring(0, path.lastIndexOf('/'));
-  
-  // Create directory if it doesn't exist
-  await Bun.write(join(dir, '.keep'), '');
-
-  const exampleConfigPath = join(import.meta.dir, '..', 'settings.json.example');
-  const exampleConfigFile = Bun.file(exampleConfigPath);
-  if (await exampleConfigFile.exists()) {
-    await Bun.write(path, await exampleConfigFile.text());
-    return;
-  }
-
-  const fallbackConfig: Config = {
-    provider: 'llama.cpp',
-    providers: {
-      'llama.cpp': {
-        api_key: 'optional',
-        model: 'model',
-        base_url: 'http://localhost:8080/v1',
-      },
-    },
-    allowExecute: true,
-    mcp: {
-      autoExecute: false,
-    },
-  };
-
-  await Bun.write(path, JSON.stringify(fallbackConfig, null, 2));
 }

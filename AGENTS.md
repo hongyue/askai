@@ -94,7 +94,6 @@ try {
 -c, --config <path>      # Config file path
 -e, --execute <mode>     # Set shell command execution: on or off
 -x, --mcp <mode>         # Enable / disable MCP servers: on or off
--i, --init               # Create default config
 ```
 
 ## Configuration

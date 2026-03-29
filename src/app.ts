@@ -715,7 +715,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       const spinner = statusSpinnerFrames[statusSpinnerIndex % statusSpinnerFrames.length];
       statusBarTextNode.content = new StyledText([
         fg('#ffaa00')(` ${spinner} `),
-        fg('#d8d8d8')('Running shell command. Ctrl+C to interrupt'),
+        fg('#d8d8d8')('Working... Ctrl+C to interrupt'),
       ]);
       root.requestRender();
       return;
@@ -725,7 +725,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       const spinner = statusSpinnerFrames[statusSpinnerIndex % statusSpinnerFrames.length];
       statusBarTextNode.content = new StyledText([
         fg('#00d4ff')(` ${spinner} `),
-        fg('#d8d8d8')('Requesting LLM. Ctrl+C to interrupt'),
+        fg('#d8d8d8')('Working... Ctrl+C to interrupt'),
       ]);
       root.requestRender();
       return;

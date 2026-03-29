@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+release/
 *.tsbuildinfo
 
 # Bun
@@ -23,8 +24,8 @@ askai
 Thumbs.db
 
 # Config (contains API keys)
-config.json
-~/.askai/config.json
+settings.json
+~/.askai/settings.json
 
 # Logs
 *.log

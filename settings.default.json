@@ -1,0 +1,36 @@
+{
+  "provider": "llama.cpp",
+  "allowExecute": true,
+  "providers": {
+    "llama.cpp": {
+      "api_key": "optional",
+      "model": "model",
+      "base_url": "http://localhost:8080/v1"
+    },
+    "openai": {
+      "api_key": "sk-your-openai-key",
+      "model": "gpt-4o",
+      "base_url": "https://api.openai.com/v1"
+    },
+    "openrouter": {
+      "api_key": "sk-or-your-openrouter-key",
+      "model": "openai/gpt-4o-mini",
+      "base_url": "https://openrouter.ai/api/v1"
+    },
+    "anthropic": {
+      "api_key": "sk-ant-your-anthropic-key",
+      "model": "claude-sonnet-4-20250514"
+    },
+    "ollama": {
+      "api_key": "ollama",
+      "model": "llama3",
+      "base_url": "http://localhost:11434/v1"
+    }
+  },
+  "mcp": {
+    "autoExecute": false
+  },
+  "mcpServers": {
+ 
+  }
+}

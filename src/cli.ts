@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { createDefaultConfig, loadConfig } from './config';
+import { loadConfig } from './config';
 import { runOneShotApp, runOpenTUIApp } from './app';
 
 export const program = new Command();
@@ -16,19 +16,7 @@ program
   .option('-c, --config <path>', 'Config file path')
   .option('-e, --execute <mode>', 'Set shell command execution: on or off')
   .option('-x, --mcp <mode>', 'Enable / disable MCP servers: on or off')
-  .option('-i, --init', 'Create a default config file')
   .action(async (question: string[] | undefined, options) => {
-    if (options.init) {
-      try {
-        await createDefaultConfig(options.config);
-        console.log('Config file created successfully!');
-      } catch (error) {
-        console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        process.exit(1);
-      }
-      return;
-    }
-
     const questionText = question && question.length > 0 ? question.join(' ') : undefined;
 
     try {

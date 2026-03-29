@@ -15,19 +15,40 @@ A terminal AI agent that answers your questions with streaming responses and she
 
 ### Quick Install (Recommended)
 
-```bash
-# Build the binary
-bun install
-bun run build
+Download and unpack a prebuilt release bundle from GitHub Releases:
 
-# Run installer
+```bash
+# macOS Apple Silicon
+curl -L -o askai-darwin-arm64.tar.gz https://github.com/hongyue/askai/releases/latest/download/askai-darwin-arm64.tar.gz
+tar -xzf askai-darwin-arm64.tar.gz
+./install.sh
+```
+
+Available release assets:
+- `askai-darwin-arm64.tar.gz`
+- `askai-darwin-x64.tar.gz`
+- `askai-linux-x64.tar.gz`
+- `askai-linux-arm64.tar.gz`
+
+Each release bundle contains:
+- `askai`
+- `install.sh`
+- `settings.default.json`
+
+You can also install directly from source with one command:
+
+```bash
+# Clone the repo, then run:
 ./install.sh
 ```
 
 The installer will:
-1. Copy the binary to `~/.local/bin/`
-2. Add `~/.local/bin` to your PATH if needed
-3. Add shell integration (alias for special characters)
+1. Build `askai` from source if needed
+2. Install Bun automatically if it is missing and a source build is required
+3. Copy the binary to `~/.local/bin/`
+4. Copy `settings.default.json` to `~/.askai/settings.json` if that file does not already exist
+5. Add `~/.local/bin` to your PATH if needed
+6. Add shell integration (alias for special characters)
 
 ### Manual Install
 
@@ -76,13 +97,9 @@ askai "what is 2+2?"
 
 ## Configuration
 
-Create a settings file at `~/.askai/settings.json`:
+The installer ships a default settings template and copies it to `~/.askai/settings.json` if that file does not already exist.
 
-```bash
-askai --init
-```
-
-Or manually create it:
+Default settings template:
 
 ```json
 {
@@ -147,7 +164,6 @@ Options:
   -c, --config <path>    Config file path
   -e, --execute <mode>   Set shell command execution: on or off
   -x, --mcp <mode>       Enable / disable MCP servers: on or off
-  -i, --init             Create default config file
 ```
 
 ### Examples
@@ -180,6 +196,8 @@ askai --mcp on what is 2+2
 # Use custom config
 askai -c ./my-settings.json hello
 ```
+
+If the settings file is missing, askai will stop and tell you to provide one or use `--config <path>`.
 
 ## Shell Command Execution
 
@@ -247,6 +265,18 @@ bun run build
 # Run installer
 ./install.sh
 ```
+
+## Releases
+
+This repo includes a GitHub Actions release workflow at `.github/workflows/release.yml`.
+
+When you publish a GitHub Release, it:
+- builds precompiled binaries for macOS and Linux
+- runs `npx tsc --noEmit`
+- bundles `askai`, `install.sh`, and `settings.default.json` into tarballs
+- uploads the tarballs and SHA256 checksum files as release assets
+
+The GitHub release workflow builds the full macOS/Linux release matrix.
 
 ## License
 

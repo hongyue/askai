@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            asset: askai-linux-x64
+          - os: ubuntu-latest
+            target: bun-linux-arm64
+            asset: askai-linux-arm64
+          - os: macos-latest
+            target: bun-darwin-x64
+            asset: askai-darwin-x64
+          - os: macos-latest
+            target: bun-darwin-arm64
+            asset: askai-darwin-arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build binary
+        run: bun build ./src/index.ts --compile --outfile ${{ matrix.asset }} --target=${{ matrix.target }}
+
+      - name: Bundle release archive
+        shell: bash
+        run: |
+          mkdir release-bundle
+          cp ${{ matrix.asset }} release-bundle/askai
+          cp install.sh release-bundle/install.sh
+          cp settings.default.json release-bundle/settings.default.json
+          chmod +x release-bundle/askai release-bundle/install.sh
+          tar -czf ${{ matrix.asset }}.tar.gz -C release-bundle askai install.sh settings.default.json
+          shasum -a 256 ${{ matrix.asset }}.tar.gz > ${{ matrix.asset }}.tar.gz.sha256
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ matrix.asset }}.tar.gz
+            ${{ matrix.asset }}.tar.gz.sha256
