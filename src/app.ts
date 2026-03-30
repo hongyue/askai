@@ -678,6 +678,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     wrapMode: 'word',
     keyBindings: [
       { name: 'return', action: 'submit' },
+      { name: 'j', shift: true, action: "newline" },
     ],
   });
   inputRow.add(input);
