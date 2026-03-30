@@ -1,4 +1,11 @@
-import { createCliRenderer, Box, Text, ScrollBox, StyledText, TextareaRenderable, fg, h, stringToStyledText, type KeyEvent } from "@opentui/core"
+import { 
+  createCliRenderer, 
+  Box, Text, ScrollBox, StyledText, 
+  TextareaRenderable, fg, h, 
+  stringToStyledText, 
+  type KeyEvent, 
+  BoxRenderable 
+} from "@opentui/core"
 import { loadConfig } from './config';
 import { MCPManager, MCPServerState } from './mcp';
 import { createInitialState, createCommands, Command } from './commands';
@@ -561,7 +568,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     height: 0,
     flexDirection: 'column',
     visible: false,
-    paddingLeft: 3,
+    paddingLeft: 1,
   });
   const cmdListText = Text({ id: 'command-palette', content: stringToStyledText(''), fg: '#888888' });
   cmdListBox.add(cmdListText);
@@ -572,7 +579,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     height: 1,
     flexShrink: 0,
     backgroundColor: '#181818',
-    paddingLeft: 1,
+    paddingLeft: 0,
     paddingRight: 1,
   });
   const statusBarText = Text({
@@ -646,10 +653,17 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     flexShrink: 0,
     flexDirection: 'row',
     backgroundColor: '#1f1f1f',
-    paddingLeft: 1,
+    paddingLeft: 0,
     paddingRight: 1,
   });
-  inputRow.add(Text({ content: ' > ', fg: '#00d4ff' }));
+  inputRow.add(Box({ 
+    width: 3,
+    height: '100%',
+    flexDirection: 'column', 
+    alignItems: 'center',
+    backgroundColor: '#1f1f1f',
+    border: false,
+  }).add(Text({ content: '>', fg: '#00d4ff'})));
   
   const input = h(TextareaRenderable, {
     id: 'main-input',
@@ -660,7 +674,6 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     placeholder: 'Type / for commands...',
     textColor: '#ffffff',
     backgroundColor: '#1f1f1f',
-    focusedBackgroundColor: '#262626',
     cursorColor: '#00d4ff',
     wrapMode: 'word',
     keyBindings: [
@@ -668,9 +681,34 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     ],
   });
   inputRow.add(input);
-  root.add(inputRow);
-  root.add(cmdListBox);
-  root.add(statusBar);
+
+  const bottomBox = Box({
+    id: 'bottom-box',
+    width: '100%',
+    height: 'auto',
+    flexShrink: 0,
+    flexDirection: 'row',
+  });
+  const leftBar = Box({
+    id: "left-bar",
+    height: '100%',
+    width: 1,
+    border: false,
+    backgroundColor: '#FF5555',
+  });
+  const inputBox = Box({
+    id: 'input-box',
+    width: '100%',
+    height: 'auto',
+    flexDirection: 'column',
+    backgroundColor: '#1f1f1f',
+  });
+  inputBox.add(inputRow);
+  inputBox.add(cmdListBox);
+  inputBox.add(statusBar);
+  bottomBox.add(leftBar);
+  bottomBox.add(inputBox);
+  root.add(bottomBox);
   root.add(approvalDialog);
   root.add(mcpModal);
   root.add(mcpDetailsModal);
