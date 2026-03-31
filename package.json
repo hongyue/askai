@@ -21,8 +21,9 @@
   "description": "A terminal AI agent that answers your questions",
   "scripts": {
     "start": "bun run src/index.ts",
-    "build": "bun build ./src/index.ts --compile --outfile askai",
-    "dev": "bun --watch src/index.ts"
+    "build": "bun run typecheck && bun build ./src/index.ts --compile --outfile askai",
+    "dev": "bun --watch src/index.ts",
+    "typecheck": "npx tsc --noEmit"
   },
   "type": "module"
 }

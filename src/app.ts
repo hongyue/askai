@@ -354,7 +354,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
-    useAlternateScreen: true,
+    screenMode: 'alternate-screen',
     useKittyKeyboard: {
       disambiguate: true,
       allKeysAsEscapes: true,
