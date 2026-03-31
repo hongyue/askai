@@ -108,6 +108,19 @@ const approvalActions = [
   { key: 'x', label: 'None' },
 ] as const;
 type ApprovalActionKey = typeof approvalActions[number]['key'];
+const promptAccentBorderChars = {
+  topLeft: '▌',
+  topRight: ' ',
+  bottomLeft: '▌',
+  bottomRight: ' ',
+  horizontal: ' ',
+  vertical: '▌',
+  topT: '▌',
+  bottomT: '▌',
+  leftT: '▌',
+  rightT: ' ',
+  cross: '▌',
+} as const;
 
 function getRandomOneShotFeedbackPrompt(): string {
   const index = Math.floor(Math.random() * oneShotFeedbackPrompts.length);
@@ -666,10 +679,9 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     paddingRight: 1,
   });
   inputRow.add(Box({ 
-    width: 3,
+    width: 2,
     height: '100%',
     flexDirection: 'column', 
-    alignItems: 'center',
     backgroundColor: '#1f1f1f',
     border: false,
   }).add(Text({ content: '>', fg: '#00d4ff'})));
@@ -700,24 +712,19 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     flexShrink: 0,
     flexDirection: 'row',
   });
-  const leftBar = Box({
-    id: "left-bar",
-    height: '100%',
-    width: 1,
-    border: false,
-    backgroundColor: '#FF5555',
-  });
   const inputBox = Box({
     id: 'input-box',
     width: '100%',
     height: 'auto',
     flexDirection: 'column',
     backgroundColor: '#1f1f1f',
+    border: ['left'],
+    borderColor: '#ff9e3d',
+    customBorderChars: promptAccentBorderChars,
   });
   inputBox.add(inputRow);
   inputBox.add(cmdListBox);
   inputBox.add(statusBar);
-  bottomBox.add(leftBar);
   bottomBox.add(inputBox);
   root.add(bottomBox);
   root.add(approvalDialog);
@@ -781,8 +788,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
 
     statusBarTextNode.content = new StyledText([
-      fg('#5f5f5f')(' . '),
-      fg('#7a7a7a')('Ready'),
+      fg('#7a7a7a')(' Ready'),
     ]);
     root.requestRender();
   }
