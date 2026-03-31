@@ -29,7 +29,7 @@ askai
 Use `Shift+Enter` to insert a new line in the prompt editor. If it doesn't work use 
 `Shift+J` as a fallback.
 
-If you use `tmux`, enable extended keys so `Shift+Enter` is passed through to askai:
+If you use `tmux`, add the following settings to $HOME/.tmux.conf to make `Shift+Enter` work:
 
 ```tmux
 set -s extended-keys on
