@@ -24,6 +24,26 @@ askai what is the capital of France
 askai
 ```
 
+### Multiline Input
+
+Use `Shift+Enter` to insert a new line in the prompt editor. If it doesn't work use 
+`Shift+J` as a fallback.
+
+If you use `tmux`, enable extended keys so `Shift+Enter` is passed through to askai:
+
+```tmux
+set -s extended-keys on
+set -as terminal-features 'xterm*:extkeys'
+set -g extended-keys-format csi-u
+```
+
+Then restart tmux completely:
+
+```bash
+tmux kill-server
+tmux
+```
+
 ### Examples
 
 ```bash

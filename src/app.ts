@@ -94,6 +94,13 @@ const ansiReset = '\x1b[0m';
 const mcpDetailsModalHeight = 20;
 const mcpDetailsVisibleLineCount = 15;
 const statusSpinnerFrames = ['|', '/', '-', '\\'] as const;
+const enableModifyOtherKeys = '\x1b[>4;2m';
+const resetModifyOtherKeys = '\x1b[>4m';
+const shiftEnterSequences = new Set([
+  '\x1b[13;2u',
+  '\x1b[27;2;13~',
+  '\x1b[13;2~',
+]);
 const approvalActions = [
   { key: 'y', label: 'Yes' },
   { key: 'n', label: 'No' },
@@ -350,8 +357,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     useAlternateScreen: true,
     useKittyKeyboard: {
       disambiguate: true,
+      allKeysAsEscapes: true,
     },
   });
+  process.stdout.write(enableModifyOtherKeys);
 
   renderer.prependInputHandler((sequence: string) => {
     if (mcpDetailsOpen) {
@@ -678,6 +687,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     wrapMode: 'word',
     keyBindings: [
       { name: 'return', action: 'submit' },
+      { name: 'return', shift: true, action: 'newline' },
       { name: 'j', shift: true, action: "newline" },
     ],
   });
@@ -776,6 +786,30 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     ]);
     root.requestRender();
   }
+
+  function insertInputNewline(): void {
+    const currentText = inputNode.plainText;
+    const cursorOffset = typeof inputNode.cursorOffset === 'number' ? inputNode.cursorOffset : currentText.length;
+    const nextText = `${currentText.slice(0, cursorOffset)}\n${currentText.slice(cursorOffset)}`;
+    inputNode.setText(nextText);
+    if (typeof inputNode.cursorOffset === 'number') {
+      inputNode.cursorOffset = cursorOffset + 1;
+    }
+    inputBuffer = nextText;
+  }
+
+  renderer.prependInputHandler((sequence: string) => {
+    if (mcpModalOpen || mcpDetailsOpen || pendingExecution) {
+      return false;
+    }
+
+    if (shiftEnterSequences.has(sequence)) {
+      insertInputNewline();
+      return true;
+    }
+
+    return false;
+  });
 
   function restoreApprovalDraft(): void {
     if (inputNode.plainText !== approvalDraftText) {
@@ -1529,6 +1563,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         return;
       }
       if (mcpManager) await mcpManager.disconnectAll();
+      process.stdout.write(resetModifyOtherKeys);
       renderer.destroy();
       process.exit(0);
     }
@@ -1597,6 +1632,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     if (mcpManager) {
       await mcpManager.disconnectAll();
     }
+    process.stdout.write(resetModifyOtherKeys);
     renderer.destroy();
     process.exit(0);
   };
