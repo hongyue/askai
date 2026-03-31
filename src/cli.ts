@@ -12,8 +12,8 @@ program
 
 program
   .argument('[question...]', 'Question to ask (oneshot mode)')
-  .option('-p, --provider <name>', 'Override provider')
-  .option('-m, --model <name>', 'Override model')
+  .option('-p, --provider <id>', 'Override provider id')
+  .option('-m, --model <name>', 'Override the selected provider model')
   .option('-c, --config <path>', 'Config file path')
   .option('-e, --execute <mode>', 'Set shell command execution: on or off')
   .option('-x, --mcp <mode>', 'Enable / disable MCP servers: on or off')

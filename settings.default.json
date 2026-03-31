@@ -1,36 +1,40 @@
 {
-  "provider": "llama.cpp",
+  "provider": "custom-1",
   "allowExecute": true,
   "providers": {
-    "llama.cpp": {
-      "api_key": "optional",
-      "model": "model",
-      "base_url": "http://localhost:8080/v1"
-    },
     "openai": {
+      "kind": "openai",
+      "display_name": "OpenAI",
       "api_key": "sk-your-openai-key",
+      "base_url": "https://api.openai.com/v1",
       "model": "gpt-4o",
-      "base_url": "https://api.openai.com/v1"
+      "models": ["gpt-4o", "gpt-4o-mini"]
     },
     "openrouter": {
+      "kind": "openrouter",
+      "display_name": "OpenRouter",
       "api_key": "sk-or-your-openrouter-key",
-      "model": "openai/gpt-4o-mini",
-      "base_url": "https://openrouter.ai/api/v1"
+      "base_url": "https://openrouter.ai/api/v1",
+      "model": "openai/gpt-4o-mini"
     },
     "anthropic": {
+      "kind": "anthropic",
+      "display_name": "Anthropic",
       "api_key": "sk-ant-your-anthropic-key",
       "model": "claude-sonnet-4-20250514"
     },
-    "ollama": {
+    "custom-1": {
+      "kind": "custom",
+      "display_name": "Local Ollama",
       "api_key": "ollama",
+      "base_url": "http://localhost:11434/v1",
       "model": "llama3",
-      "base_url": "http://localhost:11434/v1"
+      "models": ["llama3", "qwen2.5-coder"]
     }
   },
   "mcp": {
     "autoExecute": false
   },
   "mcpServers": {
- 
   }
 }

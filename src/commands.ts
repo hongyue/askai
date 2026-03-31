@@ -6,7 +6,7 @@ export interface SessionState {
 export interface Command {
   name: string;
   description: string;
-  action: () => string | void;
+  action: (args: string[]) => Promise<string | void> | string | void;
 }
 
 export function createInitialState(allowExecute: boolean, mcpEnabled: boolean): SessionState {
@@ -21,11 +21,23 @@ export function createCommands(
   onStateChange: () => void,
   onClear?: () => void,
   onOpenMcpModal?: () => void,
+  onProviderCommand?: (args: string[]) => Promise<string | void>,
+  onModelCommand?: (args: string[]) => Promise<string | void>,
 ): Command[] {
   return [
     {
+      name: 'provider',
+      description: 'manage the providers',
+      action: (args) => onProviderCommand?.(args),
+    },
+    {
+      name: 'model',
+      description: 'select what model to use',
+      action: (args) => onModelCommand?.(args),
+    },
+    {
       name: 'shell-execute',
-      description: 'Toggle shell command execution',
+      description: 'toggle shell command execution',
       action: () => {
         state.allowExecute = !state.allowExecute;
         const status = state.allowExecute ? 'enabled' : 'disabled';
@@ -35,7 +47,7 @@ export function createCommands(
     },
     {
       name: 'mcp',
-      description: 'Manage the MCP servers',
+      description: 'manage MCP servers',
       action: () => {
         onOpenMcpModal?.();
         return 'Opened the MCP servers manager';
@@ -43,21 +55,21 @@ export function createCommands(
     },
     {
       name: 'clear',
-      description: 'Clear the screen',
+      description: 'clear the screen',
       action: () => {
         onClear?.();
       },
     },
     {
       name: 'exit',
-      description: 'Exit askai',
+      description: 'exit askai',
       action: () => {
         // This is handled specially in the app
       },
     },
     {
       name: 'quit',
-      description: 'Exit askai',
+      description: 'exit askai',
       action: () => {
         // This is handled specially in the app
       },

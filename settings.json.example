@@ -1,30 +1,34 @@
 {
-  "provider": "llama.cpp",
+  "provider": "openai",
   "allowExecute": true,
   "providers": {
-    "llama.cpp": {
-      "api_key": "optional",
-      "model": "model",
-      "base_url": "http://localhost:8080/v1"
-    },
     "openai": {
+      "kind": "openai",
+      "display_name": "OpenAI",
       "api_key": "sk-your-openai-key",
-      "model": "gpt-4o",
-      "base_url": "https://api.openai.com/v1"
-    },
-    "openrouter": {
-      "api_key": "sk-or-your-openrouter-key",
-      "model": "openai/gpt-4o-mini",
-      "base_url": "https://openrouter.ai/api/v1"
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4o"
     },
     "anthropic": {
+      "kind": "anthropic",
+      "display_name": "Anthropic",
       "api_key": "sk-ant-your-anthropic-key",
       "model": "claude-sonnet-4-20250514"
     },
-    "ollama": {
-      "api_key": "ollama",
-      "model": "llama3",
-      "base_url": "http://localhost:11434/v1"
+    "openrouter": {
+      "kind": "openrouter",
+      "display_name": "OpenRouter",
+      "api_key": "sk-or-your-openrouter-key",
+      "base_url": "https://openrouter.ai/api/v1",
+      "model": "openai/gpt-4o-mini"
+    },
+    "custom-1": {
+      "kind": "custom",
+      "display_name": "Company Gateway",
+      "api_key": "sk-your-company-key",
+      "base_url": "https://llm.example.com/v1",
+      "model": "gpt-4.1-mini",
+      "models": ["gpt-4.1-mini", "gpt-4.1"]
     }
   },
   "mcp": {

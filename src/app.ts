@@ -6,11 +6,27 @@ import {
   type KeyEvent, 
   BoxRenderable 
 } from "@opentui/core"
-import { loadConfig } from './config';
+import {
+  customProviderIds,
+  fixedProviderIds,
+  getProviderLabel,
+  loadConfig,
+  removeProviderModel,
+  resolveConfigPath,
+  resolveProviderConfig,
+  saveConfig,
+  setActiveProvider,
+  setProviderModel,
+  upsertProvider,
+  type ProviderConfig,
+  type ProviderType,
+  type ResolvedProviderConfig,
+} from './config';
 import { MCPManager, MCPServerState } from './mcp';
 import { createInitialState, createCommands, Command } from './commands';
 import { ChatOptions, Message, ToolCall } from './providers/base';
 import { createProviderFromConfig } from './providers';
+import { fetchAvailableModels } from './providers/models';
 import { MCPTool } from './mcp/client';
 import { convertToOpenAITools, convertToAnthropicTools } from './mcp/tools';
 import {
@@ -28,10 +44,14 @@ interface MutableTextNode {
 }
 
 interface MutableBoxNode {
-  height: number | 'auto' | `${number}%`;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number | 'auto' | `${number}%`;
   visible: boolean;
   add(obj: unknown, index?: number): number;
   remove(id: string): void;
+  onMouseDown?: ((event: { x: number; y: number }) => void) | undefined;
   onMouseScroll?: ((event: { scroll?: { direction?: string; delta?: number } }) => void) | undefined;
 }
 
@@ -81,6 +101,40 @@ interface ActiveShellCommand {
   escalationTimer?: ReturnType<typeof setTimeout>;
 }
 
+type ProviderModalFocus = 'providers';
+type ModelModalFocus = 'providers' | 'filter' | 'models';
+
+interface ProviderFormState {
+  providerId: string;
+  values: Record<string, string>;
+  activeFieldIndex: number;
+  cursorOffset: number;
+  error?: string;
+}
+
+interface ProviderFormField {
+  key: string;
+  label: string;
+  kind: 'text';
+}
+
+interface ProviderSlot {
+  id: string;
+  displayName: string;
+  kind: 'openai' | 'anthropic' | 'openrouter' | 'custom';
+  configured: boolean;
+  apiKeyConfigured: boolean;
+  baseUrl?: string;
+  model?: string;
+  models: string[];
+  resolved?: ResolvedProviderConfig;
+}
+
+interface FilterState {
+  value: string;
+  cursorOffset: number;
+}
+
 const oneShotFeedbackPrompts = [
   'Thinking...',
   'Working on it...',
@@ -107,7 +161,20 @@ const approvalActions = [
   { key: 'a', label: 'All' },
   { key: 'x', label: 'None' },
 ] as const;
+const providerModalVisibleItems = 8;
+const providerModalVisibleModels = 8;
+const providerFormFields: ProviderFormField[] = [
+  { key: 'display_name', label: 'Display Name', kind: 'text' },
+  { key: 'api_key', label: 'API Key', kind: 'text' },
+  { key: 'base_url', label: 'Base URL', kind: 'text' },
+  { key: 'model', label: 'Model Name', kind: 'text' },
+];
 type ApprovalActionKey = typeof approvalActions[number]['key'];
+const presetProviderMeta = [
+  { id: 'openai', displayName: 'OpenAI', kind: 'openai' as const, baseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o' },
+  { id: 'anthropic', displayName: 'Anthropic', kind: 'anthropic' as const, baseUrl: 'https://api.anthropic.com', defaultModel: 'claude-sonnet-4-20250514' },
+  { id: 'openrouter', displayName: 'OpenRouter', kind: 'openrouter' as const, baseUrl: 'https://openrouter.ai/api/v1', defaultModel: 'openai/gpt-4o-mini' },
+] as const;
 const promptAccentBorderChars = {
   topLeft: '▌',
   topRight: ' ',
@@ -121,6 +188,21 @@ const promptAccentBorderChars = {
   rightT: ' ',
   cross: '▌',
 } as const;
+
+function clampScrollOffset(selectedIndex: number, currentOffset: number, visibleCount: number, totalCount: number): number {
+  if (totalCount <= visibleCount) {
+    return 0;
+  }
+
+  let nextOffset = currentOffset;
+  if (selectedIndex < nextOffset) {
+    nextOffset = selectedIndex;
+  } else if (selectedIndex >= nextOffset + visibleCount) {
+    nextOffset = selectedIndex - visibleCount + 1;
+  }
+
+  return Math.max(0, Math.min(nextOffset, totalCount - visibleCount));
+}
 
 function getRandomOneShotFeedbackPrompt(): string {
   const index = Math.floor(Math.random() * oneShotFeedbackPrompts.length);
@@ -138,18 +220,28 @@ function isEscapeKey(key: KeyEvent): boolean {
 
 async function initializeRuntime(options: RunAppOptions): Promise<{
   config: Awaited<ReturnType<typeof loadConfig>>;
+  configPath: string;
   mcpManager: MCPManager | undefined;
-  provider: Awaited<ReturnType<typeof createProviderFromConfig>>;
+  getProvider: () => Awaited<ReturnType<typeof createProviderFromConfig>>;
+  getResolvedProvider: () => ResolvedProviderConfig;
   systemPrompt: string;
   state: ReturnType<typeof createInitialState>;
   getProviderTools: () => any[];
   refreshProviderTools: () => Promise<void>;
+  switchProvider: (providerId: string, persist?: boolean) => Promise<Awaited<ReturnType<typeof createProviderFromConfig>>>;
+  switchModel: (model: string, persist?: boolean) => Promise<Awaited<ReturnType<typeof createProviderFromConfig>>>;
+  persistConfig: () => Promise<void>;
   getMcpServerStates: () => MCPServerState[];
   messages: Message[];
 }> {
-  const config = await loadConfig(options.configPath);
-  if (options.providerName) config.provider = options.providerName;
-  if (options.modelName) config.providers[config.provider].model = options.modelName;
+  const configPath = resolveConfigPath(options.configPath);
+  const config = await loadConfig(configPath);
+  if (options.providerName) {
+    setActiveProvider(config, options.providerName);
+  }
+  if (options.modelName) {
+    setProviderModel(config, config.provider, options.modelName);
+  }
 
   let mcpManager: MCPManager | undefined;
   let mcpTools: MCPTool[] = [];
@@ -160,14 +252,15 @@ async function initializeRuntime(options: RunAppOptions): Promise<{
     mcpTools = await mcpManager.listEnabledTools();
   }
 
-  const provider = await createProviderFromConfig(config);
+  let resolvedProvider = resolveProviderConfig(config);
+  let provider = await createProviderFromConfig(resolvedProvider);
   const systemPrompt = config.system_prompt || 'You are a helpful terminal assistant.';
   const state = createInitialState(options.allowExecute, options.mcpEnabled);
 
-  function convertTools(tools: MCPTool[]): any[] {
+  function convertTools(providerType: ProviderType, tools: MCPTool[]): any[] {
     if (tools.length === 0) return [];
-    switch (provider.name) {
-      case 'openai': case 'llama': case 'ollama':
+    switch (providerType) {
+      case 'openai-compatible':
         return convertToOpenAITools(tools);
       case 'anthropic':
         return convertToAnthropicTools(tools);
@@ -176,7 +269,7 @@ async function initializeRuntime(options: RunAppOptions): Promise<{
     }
   }
 
-  let providerTools = convertTools(mcpTools);
+  let providerTools = convertTools(resolvedProvider.type, mcpTools);
   const refreshProviderTools = async () => {
     if (mcpManager) {
       await mcpManager.refreshTools();
@@ -184,19 +277,48 @@ async function initializeRuntime(options: RunAppOptions): Promise<{
     } else {
       mcpTools = [];
     }
-    providerTools = state.mcpEnabled ? convertTools(mcpTools) : [];
+    providerTools = state.mcpEnabled ? convertTools(resolvedProvider.type, mcpTools) : [];
+  };
+
+  const persistConfig = async () => {
+    await saveConfig(config, configPath);
+  };
+
+  const rebuildProvider = async (persist: boolean) => {
+    resolvedProvider = resolveProviderConfig(config);
+    provider = await createProviderFromConfig(resolvedProvider);
+    await refreshProviderTools();
+    if (persist) {
+      await persistConfig();
+    }
+    return provider;
+  };
+
+  const switchProvider = async (providerId: string, persist = true) => {
+    setActiveProvider(config, providerId);
+    return rebuildProvider(persist);
+  };
+
+  const switchModel = async (model: string, persist = true) => {
+    setProviderModel(config, config.provider, model);
+    return rebuildProvider(persist);
   };
 
   const messages: Message[] = [{ role: 'system', content: systemPrompt }];
 
   return {
     config,
+    configPath,
     mcpManager,
-    provider,
+    getProvider: () => provider,
+    getResolvedProvider: () => resolvedProvider,
     systemPrompt,
     state,
     getProviderTools: () => providerTools,
     refreshProviderTools,
+    switchProvider,
+    switchModel,
+    persistConfig,
     getMcpServerStates: () => mcpManager ? mcpManager.listServerStates() : [],
     messages,
   };
@@ -215,6 +337,79 @@ function formatToolContent(content: Array<{ type: string; text?: string; data?: 
     })
     .join('\n')
     .trim();
+}
+
+function getProviderSummary(provider: ResolvedProviderConfig): string {
+  return `${getProviderLabel(provider)} • ${provider.type} • ${provider.model}`;
+}
+
+function normalizeProviderFormValues(values: Record<string, string>): Record<string, string> {
+  const nextValues = { ...values };
+  nextValues.display_name = nextValues.display_name || '';
+  nextValues.api_key = nextValues.api_key || '';
+  nextValues.base_url = nextValues.base_url || '';
+  nextValues.model = nextValues.model || '';
+  return nextValues;
+}
+
+function formatProviderFormTextValue(value: string, cursorOffset: number): string {
+  const clampedOffset = Math.max(0, Math.min(cursorOffset, value.length));
+  return `${value.slice(0, clampedOffset)}█${value.slice(clampedOffset)}` || '█';
+}
+
+function formatFilterValue(value: string, cursorOffset: number, active: boolean): string {
+  if (!active && value.length === 0) {
+    return '(type to filter)';
+  }
+
+  if (!active) {
+    return value;
+  }
+
+  const clampedOffset = Math.max(0, Math.min(cursorOffset, value.length));
+  return `${value.slice(0, clampedOffset)}█${value.slice(clampedOffset)}` || '█';
+}
+
+function filterModels(models: string[], filterValue: string): string[] {
+  const normalizedFilter = filterValue.trim().toLowerCase();
+  if (!normalizedFilter) {
+    return models;
+  }
+
+  return models.filter(model => model.toLowerCase().includes(normalizedFilter));
+}
+
+function getVisibleProviderFormFields(providerId: string): ProviderFormField[] {
+  const isCustomProvider = customProviderIds.includes(providerId as typeof customProviderIds[number]);
+  return providerFormFields.filter(field => {
+    if (field.key === 'display_name') {
+      return isCustomProvider;
+    }
+    if (field.key === 'base_url') {
+      return isCustomProvider;
+    }
+    if (field.key === 'model') {
+      return isCustomProvider;
+    }
+    return field.key === 'api_key';
+  });
+}
+
+function isCustomProviderId(providerId: string): boolean {
+  return customProviderIds.includes(providerId as typeof customProviderIds[number]);
+}
+
+function getPresetProviderMeta(providerId: string) {
+  return presetProviderMeta.find(item => item.id === providerId);
+}
+
+function getProviderPlaceholderLabel(providerId: string): string {
+  const preset = getPresetProviderMeta(providerId);
+  if (preset) {
+    return preset.displayName;
+  }
+  const customIndex = customProviderIds.findIndex(id => id === providerId);
+  return customIndex >= 0 ? `Custom ${customIndex + 1}` : providerId;
 }
 
 function formatApprovalDialogCommand(block: CommandBlock): string {
@@ -288,7 +483,8 @@ async function runDetectedCommandBlocks(response: string): Promise<void> {
 
 export async function runOneShotApp(options: RunAppOptions & { question: string }): Promise<void> {
   const runtime = await initializeRuntime(options);
-  const { provider, state, mcpManager, messages } = runtime;
+  const { state, mcpManager, messages } = runtime;
+  const provider = runtime.getProvider();
   let providerTools = runtime.getProviderTools();
 
   messages.push({ role: 'user', content: options.question });
@@ -332,13 +528,28 @@ export async function runOneShotApp(options: RunAppOptions & { question: string 
 
 export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const runtime = await initializeRuntime(options);
-  const { provider, mcpManager, state, messages } = runtime;
+  const { mcpManager, state, messages, config } = runtime;
+  let provider = runtime.getProvider();
+  let resolvedProvider = runtime.getResolvedProvider();
   let providerTools = runtime.getProviderTools();
   let mcpModalOpen = false;
   let mcpDetailsOpen = false;
   let mcpServerIndex = 0;
   let mcpDetailsScrollOffset = 0;
   let mcpFocus: 'server' | 'global' = 'server';
+  let providerModalOpen = false;
+  let providerModalProviderIndex = 0;
+  let providerModalProviderScrollOffset = 0;
+  let modelModalOpen = false;
+  let modelModalFocus: ModelModalFocus = 'models';
+  let modelModalProviderIndex = 0;
+  let modelModalModelIndex = 0;
+  let modelModalProviderScrollOffset = 0;
+  let modelModalModelScrollOffset = 0;
+  let modelModalFilter: FilterState = { value: '', cursorOffset: 0 };
+  let providerFormState: ProviderFormState | null = null;
+  let providerModalNotice: string | null = null;
+  let modelModalNotice: string | null = null;
   const commands = createCommands(
     state,
     () => {
@@ -363,6 +574,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       mcpFocus = 'server';
       renderMcpModal();
     },
+    async (args) => handleProviderCommand(args),
+    async (args) => handleModelCommand(args),
   );
   
   const renderer = await createCliRenderer({
@@ -376,6 +589,18 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   process.stdout.write(enableModifyOtherKeys);
 
   renderer.prependInputHandler((sequence: string) => {
+    if (providerModalOpen || modelModalOpen) {
+      if (sequence === '\x03') {
+        return false;
+      }
+      if (providerModalOpen) {
+        void handleProviderModalSequence(sequence);
+      } else {
+        void handleModelModalSequence(sequence);
+      }
+      return true;
+    }
+
     if (mcpDetailsOpen) {
       const states = runtime.getMcpServerStates();
       const selectedState = states[mcpServerIndex];
@@ -569,7 +794,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   }
   
   const root = Box({ width: '100%', height: '100%', flexDirection: 'column' });
-  root.add(Text({ content: ` Welcome to askai! (${provider.name} / ${provider.model})`, fg: '#00d4ff' }));
+  root.add(Text({ id: 'header-text', content: ` Welcome to askai! (${provider.label} / ${provider.model})`, fg: '#00d4ff' }));
   
   const chat = ScrollBox({
     id: 'chat-box',
@@ -667,6 +892,44 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     fg: '#d8d8d8',
   });
   mcpDetailsModal.add(mcpDetailsModalText);
+
+  const providerModal = Box({
+    id: 'provider-modal',
+    position: 'absolute',
+    width: '82%',
+    left: '9%',
+    top: '14%',
+    height: 'auto',
+    flexDirection: 'column',
+    visible: false,
+    backgroundColor: '#141414',
+    padding: 1,
+  });
+  const providerModalText = Text({
+    id: 'provider-modal-text',
+    content: stringToStyledText(''),
+    fg: '#d8d8d8',
+  });
+  providerModal.add(providerModalText);
+
+  const modelModal = Box({
+    id: 'model-modal',
+    position: 'absolute',
+    width: '82%',
+    left: '9%',
+    top: '14%',
+    height: 'auto',
+    flexDirection: 'column',
+    visible: false,
+    backgroundColor: '#141414',
+    padding: 1,
+  });
+  const modelModalText = Text({
+    id: 'model-modal-text',
+    content: stringToStyledText(''),
+    fg: '#d8d8d8',
+  });
+  modelModal.add(modelModalText);
   
   const inputRow = Box({
     id: 'input-row',
@@ -730,11 +993,14 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   root.add(approvalDialog);
   root.add(mcpModal);
   root.add(mcpDetailsModal);
+  root.add(providerModal);
+  root.add(modelModal);
   renderer.root.add(root);
 
   const liveCmdListBox = renderer.root.findDescendantById('cmd-list-box') as MutableBoxNode | undefined;
   const liveCmdListText = renderer.root.findDescendantById('command-palette') as MutableTextNode | undefined;
   const liveStatusBarText = renderer.root.findDescendantById('status-bar-text') as MutableTextNode | undefined;
+  const liveHeaderText = renderer.root.findDescendantById('header-text') as MutableTextNode | undefined;
   const liveInput = renderer.root.findDescendantById('main-input') as MutableInputNode | undefined;
   const liveChat = renderer.root.findDescendantById('chat-box') as MutableBoxNode | undefined;
   const liveApprovalDialog = renderer.root.findDescendantById('approval-dialog') as MutableBoxNode | undefined;
@@ -743,14 +1009,19 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const liveMcpModalText = renderer.root.findDescendantById('mcp-modal-text') as MutableTextNode | undefined;
   const liveMcpDetailsModal = renderer.root.findDescendantById('mcp-details-modal') as MutableBoxNode | undefined;
   const liveMcpDetailsModalText = renderer.root.findDescendantById('mcp-details-modal-text') as MutableTextNode | undefined;
+  const liveProviderModal = renderer.root.findDescendantById('provider-modal') as MutableBoxNode | undefined;
+  const liveProviderModalText = renderer.root.findDescendantById('provider-modal-text') as MutableTextNode | undefined;
+  const liveModelModal = renderer.root.findDescendantById('model-modal') as MutableBoxNode | undefined;
+  const liveModelModalText = renderer.root.findDescendantById('model-modal-text') as MutableTextNode | undefined;
 
-  if (!liveCmdListBox || !liveCmdListText || !liveStatusBarText || !liveInput || !liveChat || !liveApprovalDialog || !liveApprovalDialogText || !liveMcpModal || !liveMcpModalText || !liveMcpDetailsModal || !liveMcpDetailsModalText) {
+  if (!liveCmdListBox || !liveCmdListText || !liveStatusBarText || !liveHeaderText || !liveInput || !liveChat || !liveApprovalDialog || !liveApprovalDialogText || !liveMcpModal || !liveMcpModalText || !liveMcpDetailsModal || !liveMcpDetailsModalText || !liveProviderModal || !liveProviderModalText || !liveModelModal || !liveModelModalText) {
     throw new Error('Failed to initialize TUI render tree');
   }
 
   const cmdListBoxNode = liveCmdListBox;
   const cmdListTextNode = liveCmdListText;
   const statusBarTextNode = liveStatusBarText;
+  const headerTextNode = liveHeaderText;
   const inputNode = liveInput;
   const chatNode = liveChat;
   const approvalDialogNode = liveApprovalDialog;
@@ -759,6 +1030,72 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const mcpModalTextNode = liveMcpModalText;
   const mcpDetailsModalNode = liveMcpDetailsModal;
   const mcpDetailsModalTextNode = liveMcpDetailsModalText;
+  const providerModalNode = liveProviderModal;
+  const providerModalTextNode = liveProviderModalText;
+  const modelModalNode = liveModelModal;
+  const modelModalTextNode = liveModelModalText;
+
+  providerModalNode.onMouseDown = (event) => {
+    if (providerModalOpen && providerFormState) {
+      placeProviderFormCursorFromMouse(event.x, event.y);
+    }
+  };
+  providerModalNode.onMouseScroll = (event) => {
+    if (!providerModalOpen || providerFormState) {
+      return;
+    }
+
+    const direction = event.scroll?.direction;
+    if (direction === 'up' || direction === 'down') {
+      const providers = getProviderSlots();
+      if (providers.length > 0) {
+        providerModalProviderIndex = direction === 'up'
+          ? (providerModalProviderIndex + providers.length - 1) % providers.length
+          : (providerModalProviderIndex + 1) % providers.length;
+        syncProviderModalSelections(providers[providerModalProviderIndex].id);
+        renderProviderModal();
+      }
+    }
+  };
+  modelModalNode.onMouseScroll = (event) => {
+    if (!modelModalOpen) {
+      return;
+    }
+
+    const direction = event.scroll?.direction;
+    if (direction !== 'up' && direction !== 'down') {
+      return;
+    }
+
+    if (modelModalFocus === 'providers') {
+      const providers = getProviderSlots();
+      if (providers.length === 0) {
+        return;
+      }
+      modelModalProviderIndex = direction === 'up'
+        ? (modelModalProviderIndex + providers.length - 1) % providers.length
+        : (modelModalProviderIndex + 1) % providers.length;
+      syncModelModalSelection(providers[modelModalProviderIndex].id);
+    } else if (modelModalFocus === 'models') {
+      const models = getModelModalModels(getSelectedModelModalProvider());
+      if (models.length === 0) {
+        return;
+      }
+      modelModalModelIndex = direction === 'up'
+        ? (modelModalModelIndex + models.length - 1) % models.length
+        : (modelModalModelIndex + 1) % models.length;
+      modelModalModelScrollOffset = clampScrollOffset(
+        modelModalModelIndex,
+        modelModalModelScrollOffset,
+        providerModalVisibleModels,
+        models.length,
+      );
+    } else {
+      return;
+    }
+
+    renderModelModal();
+  };
 
   function updateFooterLayout() {
     const paletteHeight = palette.open ? Math.min(palette.matches.length, 5) : 0;
@@ -793,6 +1130,899 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     root.requestRender();
   }
 
+  function renderHeader(): void {
+    headerTextNode.content = stringToStyledText(` Welcome to askai! (${provider.label} / ${provider.model})`);
+    root.requestRender();
+  }
+
+  async function refreshActiveProviderView(): Promise<void> {
+    provider = runtime.getProvider();
+    resolvedProvider = runtime.getResolvedProvider();
+    providerTools = runtime.getProviderTools();
+    renderHeader();
+    renderStatusBar();
+  }
+
+  function getProviderSlots(): ProviderSlot[] {
+    return fixedProviderIds.map((providerId) => {
+      const storedProvider = config.providers[providerId];
+      if (storedProvider) {
+        const resolvedConfig = resolveProviderConfig(config, providerId);
+        return {
+          id: providerId,
+          displayName: getProviderLabel(resolvedConfig),
+          kind: resolvedConfig.kind,
+          configured: true,
+          apiKeyConfigured: Boolean(resolvedConfig.api_key),
+          baseUrl: resolvedConfig.base_url,
+          model: resolvedConfig.model,
+          models: Array.from(new Set((resolvedConfig.models && resolvedConfig.models.length > 0 ? resolvedConfig.models : [resolvedConfig.model]).filter(Boolean))),
+          resolved: resolvedConfig,
+        };
+      }
+
+      const preset = getPresetProviderMeta(providerId);
+      return {
+        id: providerId,
+        displayName: getProviderPlaceholderLabel(providerId),
+        kind: preset?.kind || 'custom',
+        configured: false,
+        apiKeyConfigured: false,
+        baseUrl: preset?.baseUrl,
+        model: preset?.defaultModel,
+        models: [],
+      };
+    });
+  }
+
+  function getSelectedProviderSlot(): ProviderSlot | undefined {
+    const providers = getProviderSlots();
+    if (providers.length === 0) {
+      return undefined;
+    }
+    providerModalProviderIndex = Math.max(0, Math.min(providerModalProviderIndex, providers.length - 1));
+    return providers[providerModalProviderIndex];
+  }
+
+  function getProviderSlotModels(providerSlot: ProviderSlot | undefined): string[] {
+    return providerSlot ? providerSlot.models : [];
+  }
+
+  function syncProviderModalSelections(targetProviderId?: string): void {
+    const providers = getProviderSlots();
+    if (providers.length === 0) {
+      providerModalProviderIndex = 0;
+      return;
+    }
+
+    const fallbackProviderId = providers[Math.max(0, Math.min(providerModalProviderIndex, providers.length - 1))]?.id || resolvedProvider.id;
+    const nextProviderId = targetProviderId || fallbackProviderId;
+    const nextProviderIndex = providers.findIndex(item => item.id === nextProviderId);
+    providerModalProviderIndex = nextProviderIndex >= 0 ? nextProviderIndex : 0;
+    providerModalProviderScrollOffset = clampScrollOffset(
+      providerModalProviderIndex,
+      providerModalProviderScrollOffset,
+      providerModalVisibleItems,
+      providers.length,
+    );
+  }
+
+  function createProviderFormState(providerSlot: ProviderSlot): ProviderFormState {
+    const values = normalizeProviderFormValues({
+      display_name: providerSlot.kind === 'custom' ? providerSlot.displayName : getProviderPlaceholderLabel(providerSlot.id),
+      api_key: providerSlot.resolved?.api_key || '',
+      base_url: providerSlot.resolved?.base_url || providerSlot.baseUrl || '',
+      model: providerSlot.resolved?.model || providerSlot.model || '',
+    });
+
+    return {
+      providerId: providerSlot.id,
+      activeFieldIndex: 0,
+      cursorOffset: (values[getVisibleProviderFormFields(providerSlot.id)[0]?.key || 'api_key'] || '').length,
+      values,
+    };
+  }
+
+  function getProviderFormConfig(providerId: string, values: Record<string, string>, previousProvider?: ProviderConfig): ProviderConfig {
+    const preset = getPresetProviderMeta(providerId);
+    if (preset) {
+      return {
+        kind: preset.kind,
+        type: preset.kind === 'anthropic' ? 'anthropic' : 'openai-compatible',
+        deployment: 'hosted',
+        display_name: preset.displayName,
+        api_key: values.api_key.trim() || undefined,
+        base_url: preset.baseUrl,
+        model: previousProvider?.model || preset.defaultModel,
+        models: previousProvider?.models,
+      };
+    }
+
+    const nextModel = values.model.trim();
+    if (!values.display_name.trim()) {
+      throw new Error('Provider name is required for custom providers.');
+    }
+    if (!values.base_url.trim()) {
+      throw new Error('Base URL is required for custom providers.');
+    }
+    if (!nextModel) {
+      throw new Error('Model name is required for custom providers.');
+    }
+
+    const nextModels = Array.from(new Set([
+      nextModel,
+      ...(previousProvider?.models || []),
+      previousProvider?.model || '',
+    ].map(item => item.trim()).filter(Boolean)));
+
+    return {
+      kind: 'custom',
+      type: 'openai-compatible',
+      deployment: 'self-hosted',
+      display_name: values.display_name.trim(),
+      api_key: values.api_key.trim() || undefined,
+      base_url: values.base_url.trim(),
+      model: nextModel,
+      models: nextModels.length > 0 ? nextModels : undefined,
+    };
+  }
+
+  function closeProviderModal(): void {
+    providerModalOpen = false;
+    providerFormState = null;
+    providerModalNode.visible = false;
+    providerModalTextNode.content = stringToStyledText('');
+    root.requestRender();
+    inputNode.focus();
+  }
+
+  function closeModelModal(): void {
+    modelModalOpen = false;
+    modelModalNode.visible = false;
+    modelModalTextNode.content = stringToStyledText('');
+    root.requestRender();
+    inputNode.focus();
+  }
+
+  function openProviderModal(): void {
+    providerModalOpen = true;
+    providerFormState = null;
+    providerModalNotice = null;
+    modelModalOpen = false;
+    modelModalNode.visible = false;
+    syncProviderModalSelections(resolvedProvider.id);
+    renderProviderModal();
+  }
+
+  function getSelectedModelModalProvider(): ProviderSlot | undefined {
+    const providers = getProviderSlots();
+    if (providers.length === 0) {
+      return undefined;
+    }
+    modelModalProviderIndex = Math.max(0, Math.min(modelModalProviderIndex, providers.length - 1));
+    return providers[modelModalProviderIndex];
+  }
+
+  function getModelModalModels(providerSlot: ProviderSlot | undefined): string[] {
+    return filterModels(getProviderSlotModels(providerSlot), modelModalFilter.value);
+  }
+
+  function syncModelModalSelection(targetProviderId?: string, targetModel?: string): void {
+    const providers = getProviderSlots();
+    if (providers.length === 0) {
+      modelModalProviderIndex = 0;
+      modelModalModelIndex = 0;
+      modelModalProviderScrollOffset = 0;
+      modelModalModelScrollOffset = 0;
+      return;
+    }
+
+    const nextProviderId = targetProviderId || resolvedProvider.id;
+    const nextProviderIndex = providers.findIndex(provider => provider.id === nextProviderId);
+    modelModalProviderIndex = Math.max(0, nextProviderIndex >= 0 ? nextProviderIndex : 0);
+    modelModalFilter = { value: '', cursorOffset: 0 };
+
+    const selectedProvider = providers[modelModalProviderIndex];
+    const models = getModelModalModels(selectedProvider);
+    const nextModel = targetModel || resolvedProvider.model;
+    const nextModelIndex = models.findIndex(model => model === nextModel);
+    modelModalModelIndex = Math.max(0, nextModelIndex >= 0 ? nextModelIndex : 0);
+
+    modelModalProviderScrollOffset = clampScrollOffset(
+      modelModalProviderIndex,
+      modelModalProviderScrollOffset,
+      providerModalVisibleItems,
+      providers.length,
+    );
+    modelModalModelScrollOffset = clampScrollOffset(
+      modelModalModelIndex,
+      modelModalModelScrollOffset,
+      providerModalVisibleModels,
+      models.length,
+    );
+  }
+
+  function openModelModal(providerId?: string): void {
+    modelModalOpen = true;
+    providerModalOpen = false;
+    modelModalFocus = 'models';
+    modelModalNotice = null;
+    modelModalFilter = { value: '', cursorOffset: 0 };
+    providerModalNode.visible = false;
+    syncModelModalSelection(providerId || resolvedProvider.id, providerId === resolvedProvider.id ? resolvedProvider.model : undefined);
+    renderModelModal();
+  }
+
+  function renderProviderModal(): void {
+    if (!providerModalOpen) {
+      return;
+    }
+
+    const providers = getProviderSlots();
+    const selectedProvider = getSelectedProviderSlot();
+
+    if (providerFormState) {
+      const formState = providerFormState;
+      const visibleFields = getVisibleProviderFormFields(formState.providerId);
+      const lines = [
+        `Edit ${getProviderPlaceholderLabel(formState.providerId)}`,
+        '',
+        ...visibleFields.map((field, index) => {
+          const rawValue = formState.values[field.key] || '';
+          const marker = index === formState.activeFieldIndex ? '>' : ' ';
+          const value = formatProviderFormTextValue(rawValue, index === formState.activeFieldIndex ? formState.cursorOffset : rawValue.length);
+          return `${marker} ${field.label.padEnd(14)} ${value || '(empty)'}`;
+        }),
+        '',
+      ];
+
+      if (formState.error) {
+        lines.push(`Error: ${formState.error}`, '');
+      }
+
+      lines.push('Tab/↑/↓ move   ←/→ cursor   type/paste to edit   click to place cursor   Enter save   Esc cancel');
+      providerModalTextNode.content = stringToStyledText(lines.join('\n'));
+      providerModalNode.visible = true;
+      if (inputNode.blur) {
+        inputNode.blur();
+      }
+      root.requestRender();
+      return;
+    }
+
+    providerModalProviderScrollOffset = clampScrollOffset(
+      providerModalProviderIndex,
+      providerModalProviderScrollOffset,
+      providerModalVisibleItems,
+      providers.length,
+    );
+
+    const visibleProviders = providers.slice(
+      providerModalProviderScrollOffset,
+      providerModalProviderScrollOffset + providerModalVisibleItems,
+    );
+    const providerLines = visibleProviders.map((item, visibleIndex) => {
+      const index = providerModalProviderScrollOffset + visibleIndex;
+      const marker = index === providerModalProviderIndex ? '>' : ' ';
+      const active = item.id === resolvedProvider.id ? ' *' : '';
+      const prefix = index === providerModalProviderIndex ? `[${marker}]` : ` ${marker} `;
+      const status = item.configured ? (item.apiKeyConfigured || item.kind === 'custom' ? 'configured' : 'needs key') : 'empty';
+      return `${prefix} ${item.displayName} • ${item.kind}${active} • ${status}`;
+    });
+
+    const summaryLines = selectedProvider ? [
+      `Provider: ${selectedProvider.displayName}`,
+      `Current model: ${selectedProvider.model || 'not set'}`,
+      `Base URL: ${selectedProvider.baseUrl || 'n/a'}`,
+      `API Key: ${selectedProvider.apiKeyConfigured ? 'configured' : 'missing'}`,
+      `State: ${selectedProvider.configured ? 'saved' : 'not configured'}`,
+    ] : ['No provider selected.'];
+
+    const lines = [
+      'Configure providers',
+      '',
+      'Providers',
+      ...(providerModalProviderScrollOffset > 0 ? ['  ^ more'] : []),
+      ...(providerLines.length > 0 ? providerLines : ['  No providers configured']),
+      ...(providerModalProviderScrollOffset + providerModalVisibleItems < providers.length ? ['  v more'] : []),
+      '',
+      'Summary',
+      ...summaryLines,
+      '',
+      ...(providerModalNotice ? [`Notice: ${providerModalNotice}`, ''] : []),
+      '↑/↓ move   Enter edit provider   m select model   Esc/q close',
+    ];
+
+    providerModalTextNode.content = stringToStyledText(lines.join('\n'));
+    providerModalNode.visible = true;
+    if (inputNode.blur) {
+      inputNode.blur();
+    }
+    root.requestRender();
+  }
+
+  function renderModelModal(): void {
+    if (!modelModalOpen) {
+      return;
+    }
+
+    const providers = getProviderSlots();
+    const selectedProvider = getSelectedModelModalProvider();
+    const models = getModelModalModels(selectedProvider);
+    modelModalProviderScrollOffset = clampScrollOffset(
+      modelModalProviderIndex,
+      modelModalProviderScrollOffset,
+      providerModalVisibleItems,
+      providers.length,
+    );
+    modelModalModelScrollOffset = clampScrollOffset(
+      modelModalModelIndex,
+      modelModalModelScrollOffset,
+      providerModalVisibleModels,
+      models.length,
+    );
+
+    const visibleProviders = providers.slice(
+      modelModalProviderScrollOffset,
+      modelModalProviderScrollOffset + providerModalVisibleItems,
+    );
+    const providerLines = visibleProviders.map((item, visibleIndex) => {
+      const index = modelModalProviderScrollOffset + visibleIndex;
+      const marker = index === modelModalProviderIndex ? '>' : ' ';
+      const active = item.id === resolvedProvider.id ? ' *' : '';
+      const prefix = modelModalFocus === 'providers' && index === modelModalProviderIndex ? `[${marker}]` : ` ${marker} `;
+      return `${prefix} ${item.displayName}${active}`;
+    });
+
+    const visibleModels = models.slice(
+      modelModalModelScrollOffset,
+      modelModalModelScrollOffset + providerModalVisibleModels,
+    );
+    const modelLines = visibleModels.map((model, visibleIndex) => {
+      const index = modelModalModelScrollOffset + visibleIndex;
+      const marker = index === modelModalModelIndex ? '>' : ' ';
+      const active = selectedProvider && selectedProvider.id === resolvedProvider.id && model === resolvedProvider.model ? ' *' : '';
+      const prefix = modelModalFocus === 'models' && index === modelModalModelIndex ? `[${marker}]` : ` ${marker} `;
+      return `${prefix} ${model}${active}`;
+    });
+
+    const lines = [
+      'Select a model to use',
+      '',
+      'Providers',
+      ...(modelModalProviderScrollOffset > 0 ? ['  ^ more'] : []),
+      ...(providerLines.length > 0 ? providerLines : ['  No providers configured']),
+      ...(modelModalProviderScrollOffset + providerModalVisibleItems < providers.length ? ['  v more'] : []),
+      '',
+      `Filter  ${formatFilterValue(modelModalFilter.value, modelModalFilter.cursorOffset, modelModalFocus === 'filter')}`,
+      '',
+      `Models${selectedProvider ? ` (${selectedProvider.displayName})` : ''}`,
+      ...(modelModalModelScrollOffset > 0 ? ['  ^ more'] : []),
+      ...(modelLines.length > 0 ? modelLines : ['  No models available']),
+      ...(modelModalModelScrollOffset + providerModalVisibleModels < models.length ? ['  v more'] : []),
+      '',
+    ];
+
+    if (modelModalNotice) {
+      lines.push(`Notice: ${modelModalNotice}`, '');
+    }
+
+    const canDelete = selectedProvider ? isCustomProviderId(selectedProvider.id) && models.length > 0 : false;
+    lines.push(canDelete
+      ? 'Tab switch list   ↑/↓ move   ←/→ cursor in filter   Enter use model   d delete model   Esc/q close'
+      : 'Tab switch list   ↑/↓ move   ←/→ cursor in filter   Enter use model   Esc/q close');
+    modelModalTextNode.content = stringToStyledText(lines.join('\n'));
+    modelModalNode.visible = true;
+    if (inputNode.blur) {
+      inputNode.blur();
+    }
+    root.requestRender();
+  }
+
+  function startProviderForm(providerId: string): void {
+    const providerSlot = getProviderSlots().find(item => item.id === providerId);
+    if (!providerSlot) {
+      return;
+    }
+    providerFormState = createProviderFormState(providerSlot);
+    renderProviderModal();
+  }
+
+  async function saveProviderForm(): Promise<void> {
+    if (!providerFormState) {
+      return;
+    }
+
+    const formState = providerFormState;
+
+    try {
+      const providerId = formState.providerId;
+      const previousProviderConfig = config.providers[providerId];
+      const nextConfig = getProviderFormConfig(providerId, formState.values, previousProviderConfig);
+
+      if (!isCustomProviderId(providerId) && !nextConfig.api_key) {
+        throw new Error('API key is required for preset providers.');
+      }
+
+      upsertProvider(config, providerId, nextConfig);
+
+      providerModalNotice = null;
+      if (resolvedProvider.id === providerId) {
+        await runtime.switchProvider(providerId, false);
+      }
+
+      if (!isCustomProviderId(providerId)) {
+        try {
+          const fetchedModels = await fetchAvailableModels(resolveProviderConfig(config, providerId));
+          if (fetchedModels.length > 0) {
+            const currentModel = config.providers[providerId].model;
+            const orderedModels = currentModel && fetchedModels.includes(currentModel)
+              ? [currentModel, ...fetchedModels.filter(model => model !== currentModel)]
+              : fetchedModels;
+            config.providers[providerId].models = orderedModels;
+            config.providers[providerId].model = orderedModels[0];
+            providerModalNotice = `Fetched ${fetchedModels.length} models for ${getProviderLabel(resolveProviderConfig(config, providerId))}.`;
+          } else {
+            providerModalNotice = `Saved provider. No models were returned for ${getProviderPlaceholderLabel(providerId)}.`;
+          }
+        } catch (error) {
+          providerModalNotice = `Saved provider. Failed to refresh models: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        }
+      } else {
+        providerModalNotice = `Saved ${formState.values.display_name.trim() || getProviderPlaceholderLabel(providerId)}.`;
+      }
+
+      await runtime.persistConfig();
+      providerFormState = null;
+      syncProviderModalSelections(providerId);
+      await refreshActiveProviderView();
+      renderProviderModal();
+    } catch (error) {
+      formState.error = error instanceof Error ? error.message : 'Unknown error';
+      renderProviderModal();
+    }
+  }
+
+  async function applyModelSelection(): Promise<void> {
+    const selectedProvider = getSelectedModelModalProvider();
+    if (!selectedProvider) {
+      return;
+    }
+    const models = getModelModalModels(selectedProvider);
+    const selectedModel = models[modelModalModelIndex];
+    if (!selectedModel) {
+      return;
+    }
+
+    if (resolvedProvider.id !== selectedProvider.id) {
+      await runtime.switchProvider(selectedProvider.id, false);
+    }
+    if (config.providers[selectedProvider.id]?.model !== selectedModel) {
+      setProviderModel(config, selectedProvider.id, selectedModel);
+      if (config.provider === selectedProvider.id) {
+        await runtime.switchModel(selectedModel, false);
+      }
+    }
+    await runtime.persistConfig();
+    syncModelModalSelection(selectedProvider.id, selectedModel);
+    await refreshActiveProviderView();
+    closeModelModal();
+  }
+
+  async function deleteSelectedCustomModel(): Promise<void> {
+    const selectedProvider = getSelectedModelModalProvider();
+    if (!selectedProvider || !isCustomProviderId(selectedProvider.id)) {
+      return;
+    }
+    const models = getModelModalModels(selectedProvider);
+    const selectedModel = models[modelModalModelIndex];
+    if (!selectedModel) {
+      return;
+    }
+
+    try {
+      removeProviderModel(config, selectedProvider.id, selectedModel);
+      if (resolvedProvider.id === selectedProvider.id) {
+        await runtime.switchProvider(selectedProvider.id, false);
+      }
+      await runtime.persistConfig();
+      syncModelModalSelection(selectedProvider.id);
+      await refreshActiveProviderView();
+      modelModalNotice = `Deleted model ${selectedModel} from ${selectedProvider.displayName}.`;
+      renderModelModal();
+    } catch (error) {
+      modelModalNotice = error instanceof Error ? error.message : 'Unknown error';
+      renderModelModal();
+    }
+  }
+
+  function updateModelFilter(nextValue: string): void {
+    modelModalFilter.value = nextValue;
+    modelModalFilter.cursorOffset = Math.max(0, Math.min(modelModalFilter.cursorOffset, nextValue.length));
+    const selectedProvider = getSelectedModelModalProvider();
+    const filteredModels = getModelModalModels(selectedProvider);
+    modelModalModelIndex = Math.max(0, Math.min(modelModalModelIndex, Math.max(0, filteredModels.length - 1)));
+    modelModalModelScrollOffset = clampScrollOffset(
+      modelModalModelIndex,
+      modelModalModelScrollOffset,
+      providerModalVisibleModels,
+      filteredModels.length,
+    );
+  }
+
+  function insertModelFilterText(text: string): void {
+    const currentValue = modelModalFilter.value;
+    const offset = Math.max(0, Math.min(modelModalFilter.cursorOffset, currentValue.length));
+    updateModelFilter(`${currentValue.slice(0, offset)}${text}${currentValue.slice(offset)}`);
+    modelModalFilter.cursorOffset = offset + text.length;
+  }
+
+  function deleteModelFilterText(): void {
+    const currentValue = modelModalFilter.value;
+    const offset = Math.max(0, Math.min(modelModalFilter.cursorOffset, currentValue.length));
+    if (offset === 0) {
+      return;
+    }
+    updateModelFilter(`${currentValue.slice(0, offset - 1)}${currentValue.slice(offset)}`);
+    modelModalFilter.cursorOffset = offset - 1;
+  }
+
+  function moveModelFilterCursor(delta: number): void {
+    modelModalFilter.cursorOffset = Math.max(0, Math.min(modelModalFilter.cursorOffset + delta, modelModalFilter.value.length));
+  }
+
+  function insertModelFilterPaste(text: string): void {
+    const normalizedText = text
+      .replace(/\r\n/g, '\n')
+      .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '')
+      .replace(/\n/g, ' ');
+    if (!normalizedText) {
+      return;
+    }
+    insertModelFilterText(normalizedText);
+  }
+
+  async function handleProviderCommand(_args: string[]): Promise<string | void> {
+    openProviderModal();
+    return 'Opened provider modal';
+  }
+
+  async function handleModelCommand(_args: string[]): Promise<string | void> {
+    openModelModal();
+    return 'Opened model modal';
+  }
+
+  function updateProviderFormFieldValue(nextValue: string): void {
+    if (!providerFormState) {
+      return;
+    }
+
+    const formState = providerFormState;
+    const fields = getVisibleProviderFormFields(formState.providerId);
+    const field = fields[formState.activeFieldIndex];
+    formState.values[field.key] = nextValue;
+    formState.values = normalizeProviderFormValues(formState.values);
+    formState.cursorOffset = Math.max(0, Math.min(formState.cursorOffset, nextValue.length));
+    formState.error = undefined;
+  }
+
+  function insertProviderFormText(text: string): void {
+    if (!providerFormState) {
+      return;
+    }
+
+    const formState = providerFormState;
+    const fields = getVisibleProviderFormFields(formState.providerId);
+    const field = fields[formState.activeFieldIndex];
+
+    const currentValue = formState.values[field.key] || '';
+    const clampedOffset = Math.max(0, Math.min(formState.cursorOffset, currentValue.length));
+    const nextValue = `${currentValue.slice(0, clampedOffset)}${text}${currentValue.slice(clampedOffset)}`;
+    formState.cursorOffset = clampedOffset + text.length;
+    updateProviderFormFieldValue(nextValue);
+  }
+
+  function deleteProviderFormText(): void {
+    if (!providerFormState) {
+      return;
+    }
+
+    const formState = providerFormState;
+    const fields = getVisibleProviderFormFields(formState.providerId);
+    const field = fields[formState.activeFieldIndex];
+
+    const currentValue = formState.values[field.key] || '';
+    const clampedOffset = Math.max(0, Math.min(formState.cursorOffset, currentValue.length));
+    if (clampedOffset === 0) {
+      return;
+    }
+
+    const nextValue = `${currentValue.slice(0, clampedOffset - 1)}${currentValue.slice(clampedOffset)}`;
+    formState.cursorOffset = clampedOffset - 1;
+    updateProviderFormFieldValue(nextValue);
+  }
+
+  function moveProviderFormCursor(delta: number): void {
+    if (!providerFormState) {
+      return;
+    }
+
+    const formState = providerFormState;
+    const fields = getVisibleProviderFormFields(formState.providerId);
+    const field = fields[formState.activeFieldIndex];
+
+    const currentValue = formState.values[field.key] || '';
+    formState.cursorOffset = Math.max(0, Math.min(formState.cursorOffset + delta, currentValue.length));
+    formState.error = undefined;
+    renderProviderModal();
+  }
+
+  function moveProviderFormField(delta: number): void {
+    if (!providerFormState) {
+      return;
+    }
+
+    const formState = providerFormState;
+    const fields = getVisibleProviderFormFields(formState.providerId);
+    const nextIndex = formState.activeFieldIndex + delta;
+    if (nextIndex < 0) {
+      formState.activeFieldIndex = fields.length - 1;
+    } else if (nextIndex >= fields.length) {
+      formState.activeFieldIndex = 0;
+    } else {
+      formState.activeFieldIndex = nextIndex;
+    }
+    const nextField = fields[formState.activeFieldIndex];
+    const nextValue = formState.values[nextField.key] || '';
+    formState.cursorOffset = nextValue.length;
+    formState.error = undefined;
+    renderProviderModal();
+  }
+
+  function insertProviderFormPaste(text: string): void {
+    const normalizedText = text
+      .replace(/\r\n/g, '\n')
+      .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '')
+      .replace(/\n/g, ' ');
+
+    if (!normalizedText) {
+      return;
+    }
+
+    insertProviderFormText(normalizedText);
+    renderProviderModal();
+  }
+
+  function placeProviderFormCursorFromMouse(mouseX: number, mouseY: number): void {
+    if (!providerFormState || !providerModalNode.visible || typeof providerModalNode.x !== 'number' || typeof providerModalNode.y !== 'number') {
+      return;
+    }
+
+    const visibleFields = getVisibleProviderFormFields(providerFormState.providerId);
+    const contentX = providerModalNode.x + 1;
+    const contentY = providerModalNode.y + 1;
+    const fieldStartLine = contentY + 2;
+    const clickedFieldIndex = mouseY - fieldStartLine;
+    if (clickedFieldIndex < 0 || clickedFieldIndex >= visibleFields.length) {
+      return;
+    }
+
+    providerFormState.activeFieldIndex = clickedFieldIndex;
+    const field = visibleFields[clickedFieldIndex];
+    const currentValue = providerFormState.values[field.key] || '';
+    const valueColumnX = contentX + 17;
+    providerFormState.cursorOffset = Math.max(0, Math.min(mouseX - valueColumnX, currentValue.length));
+    providerFormState.error = undefined;
+    renderProviderModal();
+  }
+
+  async function handleProviderModalSequence(sequence: string): Promise<boolean> {
+    if (!providerModalOpen) {
+      return false;
+    }
+
+    if (providerFormState) {
+      if (sequence === '\x1b') {
+        providerFormState = null;
+        renderProviderModal();
+        return true;
+      }
+      if (sequence === '\t' || sequence === '\x1b[B') {
+        moveProviderFormField(1);
+        return true;
+      }
+      if (sequence === '\x1b[Z' || sequence === '\x1b[A') {
+        moveProviderFormField(-1);
+        return true;
+      }
+      if (sequence === '\x13') {
+        await saveProviderForm();
+        return true;
+      }
+      if (sequence === '\x1b[D') {
+        moveProviderFormCursor(-1);
+        return true;
+      }
+      if (sequence === '\x1b[C' || sequence === ' ') {
+        if (sequence === ' ') {
+          insertProviderFormText(' ');
+          renderProviderModal();
+        } else {
+          moveProviderFormCursor(1);
+        }
+        return true;
+      }
+      if (sequence === '\r' || sequence === '\n') {
+        await saveProviderForm();
+        return true;
+      }
+      if (sequence === '\x7f') {
+        deleteProviderFormText();
+        renderProviderModal();
+        return true;
+      }
+      if (sequence.length === 1) {
+        const charCode = sequence.charCodeAt(0);
+        if (charCode >= 32) {
+          insertProviderFormText(sequence);
+          renderProviderModal();
+          return true;
+        }
+      }
+      if (sequence.length > 1 && !sequence.includes('\x1b')) {
+        insertProviderFormPaste(sequence);
+        return true;
+      }
+      return true;
+    }
+
+    if (sequence === '\x1b' || sequence.toLowerCase() === 'q') {
+      closeProviderModal();
+      return true;
+    }
+    if (sequence === '\x1b[A') {
+      const providers = getProviderSlots();
+      if (providers.length > 0) {
+        providerModalProviderIndex = (providerModalProviderIndex + providers.length - 1) % providers.length;
+        syncProviderModalSelections(providers[providerModalProviderIndex].id);
+      }
+      renderProviderModal();
+      return true;
+    }
+    if (sequence === '\x1b[B') {
+      const providers = getProviderSlots();
+      if (providers.length > 0) {
+        providerModalProviderIndex = (providerModalProviderIndex + 1) % providers.length;
+        syncProviderModalSelections(providers[providerModalProviderIndex].id);
+      }
+      renderProviderModal();
+      return true;
+    }
+    if (sequence.toLowerCase() === 'm') {
+      openModelModal(getSelectedProviderSlot()?.id);
+      return true;
+    }
+    if (sequence === '\r' || sequence === '\n') {
+      const selectedProvider = getSelectedProviderSlot();
+      if (selectedProvider) {
+        startProviderForm(selectedProvider.id);
+      }
+      return true;
+    }
+
+    return sequence.length > 0;
+  }
+
+  async function handleModelModalSequence(sequence: string): Promise<boolean> {
+    if (!modelModalOpen) {
+      return false;
+    }
+
+    if (sequence === '\x1b' || sequence.toLowerCase() === 'q') {
+      closeModelModal();
+      return true;
+    }
+    if (sequence === '\t') {
+      modelModalFocus = modelModalFocus === 'providers'
+        ? 'filter'
+        : modelModalFocus === 'filter'
+          ? 'models'
+          : 'providers';
+      renderModelModal();
+      return true;
+    }
+    if (modelModalFocus === 'filter') {
+      if (sequence === '\x1b[D') {
+        moveModelFilterCursor(-1);
+        renderModelModal();
+        return true;
+      }
+      if (sequence === '\x1b[C') {
+        moveModelFilterCursor(1);
+        renderModelModal();
+        return true;
+      }
+      if (sequence === '\x7f') {
+        deleteModelFilterText();
+        renderModelModal();
+        return true;
+      }
+      if (sequence === '\r' || sequence === '\n') {
+        modelModalFocus = 'models';
+        renderModelModal();
+        return true;
+      }
+      if (sequence.length === 1) {
+        const charCode = sequence.charCodeAt(0);
+        if (charCode >= 32) {
+          insertModelFilterText(sequence);
+          renderModelModal();
+          return true;
+        }
+      }
+      if (sequence.length > 1 && !sequence.includes('\x1b')) {
+        insertModelFilterPaste(sequence);
+        renderModelModal();
+        return true;
+      }
+      return true;
+    }
+    if (sequence === '\x1b[A') {
+      if (modelModalFocus === 'providers') {
+        const providers = getProviderSlots();
+        if (providers.length > 0) {
+          modelModalProviderIndex = (modelModalProviderIndex + providers.length - 1) % providers.length;
+          syncModelModalSelection(providers[modelModalProviderIndex].id);
+        }
+      } else {
+        const models = getModelModalModels(getSelectedModelModalProvider());
+        if (models.length > 0) {
+          modelModalModelIndex = (modelModalModelIndex + models.length - 1) % models.length;
+          modelModalModelScrollOffset = clampScrollOffset(
+            modelModalModelIndex,
+            modelModalModelScrollOffset,
+            providerModalVisibleModels,
+            models.length,
+          );
+        }
+      }
+      renderModelModal();
+      return true;
+    }
+    if (sequence === '\x1b[B') {
+      if (modelModalFocus === 'providers') {
+        const providers = getProviderSlots();
+        if (providers.length > 0) {
+          modelModalProviderIndex = (modelModalProviderIndex + 1) % providers.length;
+          syncModelModalSelection(providers[modelModalProviderIndex].id);
+        }
+      } else {
+        const models = getModelModalModels(getSelectedModelModalProvider());
+        if (models.length > 0) {
+          modelModalModelIndex = (modelModalModelIndex + 1) % models.length;
+          modelModalModelScrollOffset = clampScrollOffset(
+            modelModalModelIndex,
+            modelModalModelScrollOffset,
+            providerModalVisibleModels,
+            models.length,
+          );
+        }
+      }
+      renderModelModal();
+      return true;
+    }
+    if (sequence.toLowerCase() === 'd') {
+      await deleteSelectedCustomModel();
+      return true;
+    }
+    if (sequence === '\r' || sequence === '\n') {
+      await applyModelSelection();
+      return true;
+    }
+
+    return sequence.length > 0;
+  }
+
   function insertInputNewline(): void {
     const currentText = inputNode.plainText;
     const cursorOffset = typeof inputNode.cursorOffset === 'number' ? inputNode.cursorOffset : currentText.length;
@@ -805,7 +2035,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   }
 
   renderer.prependInputHandler((sequence: string) => {
-    if (mcpModalOpen || mcpDetailsOpen || pendingExecution) {
+    if (mcpModalOpen || mcpDetailsOpen || pendingExecution || providerModalOpen || modelModalOpen) {
       return false;
     }
 
@@ -1382,10 +2612,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     if (!text.trim()) return;
     
     if (text.startsWith('/')) {
-      const commandName = text.slice(1).trim();
+      const parts = text.slice(1).trim().split(/\s+/).filter(Boolean);
+      const commandName = parts[0];
       const cmd = commands.find(c => c.name === commandName);
       if (cmd) {
-        await executeCommand(cmd);
+        await executeCommand(cmd, parts.slice(1), text.trim());
         return;
       }
     }
@@ -1448,18 +2679,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     renderStatusBar();
   }
   
-  async function executeCommand(cmd: Command) {
-    addMsg(`> /${cmd.name}`, '#00ff88');
+  async function executeCommand(cmd: Command, args: string[] = [], rawInput?: string) {
+    addMsg(`> ${rawInput || `/${cmd.name}`}`, '#00ff88');
     if (cmd.name === 'exit' || cmd.name === 'quit') {
       if (mcpManager) await mcpManager.disconnectAll();
       renderer.destroy();
       process.exit(0);
     }
-    const result = cmd.action();
-    if (result) {
-      addMsg(result, '#888888');
-    } else {
-      addMsg(`Executed /${cmd.name}`, '#888888');
+    try {
+      const result = await cmd.action(args);
+      if (result) {
+        addMsg(result, '#888888');
+      } else {
+        addMsg(`Executed /${cmd.name}`, '#888888');
+      }
+    } catch (error) {
+      addMsg(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`, '#ff4444');
     }
     root.requestRender();
   }
@@ -1539,7 +2774,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   }
 
   inputNode.onContentChange = () => {
-    if (mcpModalOpen) {
+    if (mcpModalOpen || providerModalOpen || modelModalOpen) {
       return;
     }
     if (pendingExecution) {
@@ -1553,7 +2788,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   };
 
   inputNode.onSubmit = async () => {
-    if (mcpModalOpen) {
+    if (mcpModalOpen || providerModalOpen || modelModalOpen) {
       return;
     }
     if (pendingExecution) {
@@ -1581,6 +2816,25 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
     if (mcpModalOpen && isEscapeKey(key)) {
       closeMcpModal();
+      return;
+    }
+
+    if (providerModalOpen && isEscapeKey(key)) {
+      closeProviderModal();
+      return;
+    }
+
+    if (modelModalOpen && isEscapeKey(key)) {
+      closeModelModal();
+      return;
+    }
+
+    if (providerModalOpen && providerFormState && (key.sequence === '\x13' || (key.ctrl && key.name === 's'))) {
+      await saveProviderForm();
+      return;
+    }
+
+    if ((providerModalOpen || modelModalOpen) && !key.ctrl && !key.meta) {
       return;
     }
 
@@ -1628,6 +2882,21 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       if (typedSlash && !palette.open && inputBuffer === '') {
         openPalette('');
       }
+    }
+  });
+
+  renderer.keyInput.on('paste', (event) => {
+    if (providerModalOpen && providerFormState) {
+      event.preventDefault();
+      const text = new TextDecoder().decode(event.bytes);
+      insertProviderFormPaste(text);
+      return;
+    }
+    if (modelModalOpen && modelModalFocus === 'filter') {
+      event.preventDefault();
+      const text = new TextDecoder().decode(event.bytes);
+      insertModelFilterPaste(text);
+      renderModelModal();
     }
   });
 

@@ -24,6 +24,13 @@ askai what is the capital of France
 askai
 ```
 
+Interactive commands:
+
+```text
+/provider                  # Open the provider modal
+/model                     # Open the model modal
+```
+
 ### Multiline Input
 
 Use `Shift+Enter` to insert a new line in the prompt editor. If it doesn't work use 
@@ -47,14 +54,14 @@ tmux
 ### Examples
 
 ```bash
-# Use OpenAI provider
+# Use a configured provider id
 askai -p openai explain quantum computing
 
-# Use OpenRouter provider
-askai -p openrouter explain quantum computing
+# Use a custom OpenAI-compatible provider
+askai -p custom-1 explain quantum computing
 
-# Use llama.cpp-compatible server
-askai -p llama.cpp local coding help
+# Use a local Ollama or llama.cpp endpoint
+askai -p custom-1 local coding help
 
 # Use specific model
 askai -m gpt-4o-mini quick question
@@ -74,6 +81,15 @@ askai --mcp on what is 2+2
 # Use custom config
 askai -c ./my-settings.json hello
 ```
+
+## Providers And Models
+
+Interactive mode has two separate modals:
+
+- `/provider` shows the fixed provider slots: `OpenAI`, `Anthropic`, `OpenRouter`, and five custom providers
+- `/model` shows models grouped by provider so you can switch the active provider/model pair directly
+
+Preset providers refresh their model list remotely after you save them in the provider modal. Custom providers are manual OpenAI-compatible endpoints; when you change a custom provider's model name, the old name is remembered in that provider's model list.
 
 ## Shell Command Execution
 

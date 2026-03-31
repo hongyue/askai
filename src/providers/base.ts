@@ -1,4 +1,4 @@
-import { ProviderConfig } from '../config';
+import { ResolvedProviderConfig } from '../config';
 import { OpenAITool, AnthropicTool } from '../mcp/tools';
 
 export interface Message {
@@ -26,6 +26,7 @@ export interface ChatOptions {
 
 export interface Provider {
   readonly name: string;
+  readonly label: string;
   readonly model: string;
   
   chat(messages: Message[], tools?: OpenAITool[] | AnthropicTool[], options?: ChatOptions): AsyncGenerator<StreamChunk, void, unknown>;
@@ -33,5 +34,5 @@ export interface Provider {
 }
 
 export interface ProviderConstructor {
-  new (config: ProviderConfig): Provider;
+  new (config: ResolvedProviderConfig, name?: string, label?: string): Provider;
 }

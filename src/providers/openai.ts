@@ -1,15 +1,17 @@
 import OpenAI from 'openai';
-import { ProviderConfig } from '../config';
+import { ResolvedProviderConfig } from '../config';
 import { ChatOptions, Message, StreamChunk, Provider, ToolCall } from './base';
 import { OpenAITool } from '../mcp/tools';
 
 export class OpenAIProvider implements Provider {
   readonly name: string;
+  readonly label: string;
   readonly model: string;
   private client: OpenAI;
   
-  constructor(config: ProviderConfig, name?: string) {
+  constructor(config: ResolvedProviderConfig, name?: string, label?: string) {
     this.name = name || 'openai';
+    this.label = label || config.display_name || this.name;
     this.model = config.model;
     this.client = new OpenAI({
       apiKey: config.api_key,

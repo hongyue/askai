@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { Beta } from '@anthropic-ai/sdk/resources/index';
-import { ProviderConfig } from '../config';
+import { ResolvedProviderConfig } from '../config';
 import { ChatOptions, Message, StreamChunk, Provider, ToolCall } from './base';
 import { AnthropicTool } from '../mcp/tools';
 
@@ -9,14 +9,17 @@ type AnthropicToolUseBlock = Beta.Tools.ToolUseBlock;
 
 export class AnthropicProvider implements Provider {
   readonly name: string;
+  readonly label: string;
   readonly model: string;
   private client: Anthropic;
   
-  constructor(config: ProviderConfig, name?: string) {
+  constructor(config: ResolvedProviderConfig, name?: string, label?: string) {
     this.name = name || 'anthropic';
+    this.label = label || config.display_name || this.name;
     this.model = config.model;
     this.client = new Anthropic({
       apiKey: config.api_key,
+      baseURL: config.base_url,
     });
   }
   

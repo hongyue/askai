@@ -1,4 +1,4 @@
-import type { Config } from '../config';
+import type { ResolvedProviderConfig } from '../config';
 import type { Provider } from './base';
 import { OpenAIProvider } from './openai';
 import { AnthropicProvider } from './anthropic';
@@ -7,18 +7,13 @@ export type { Provider, Message, StreamChunk } from './base';
 export { OpenAIProvider } from './openai';
 export { AnthropicProvider } from './anthropic';
 
-export async function createProviderFromConfig(config: Config): Promise<Provider> {
-  const providerConfig = config.providers[config.provider];
-
-  switch (config.provider) {
-    case 'openai':
-    case 'openrouter':
-    case 'llama.cpp':
-    case 'ollama':
-      return new OpenAIProvider(providerConfig, config.provider);
+export async function createProviderFromConfig(config: ResolvedProviderConfig): Promise<Provider> {
+  switch (config.type) {
+    case 'openai-compatible':
+      return new OpenAIProvider(config, config.id, config.display_name);
     case 'anthropic':
-      return new AnthropicProvider(providerConfig, config.provider);
+      return new AnthropicProvider(config, config.id, config.display_name);
     default:
-      throw new Error(`Unknown provider: ${config.provider}`);
+      throw new Error(`Unknown provider type: ${String(config.type)}`);
   }
 }
