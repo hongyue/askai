@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { MCPServerConfig } from '../config';
+import { appVersion } from '../version';
 
 export interface MCPTool {
   name: string;
@@ -28,7 +29,7 @@ export class MCPClientWrapper {
   constructor(serverName: string) {
     this.serverName = serverName;
     this.client = new Client(
-      { name: 'askai-client', version: '0.1.0' },
+      { name: 'askai-client', version: appVersion },
       { capabilities: {} }
     );
   }

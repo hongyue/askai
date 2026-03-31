@@ -1,13 +1,14 @@
 import { Command } from 'commander';
 import { loadConfig } from './config';
 import { runOneShotApp, runOpenTUIApp } from './app';
+import { appVersion } from './version';
 
 export const program = new Command();
 
 program
   .name('askai')
   .description('A terminal AI agent that answers your questions')
-  .version('0.1.0');
+  .version(appVersion);
 
 program
   .argument('[question...]', 'Question to ask (oneshot mode)')
