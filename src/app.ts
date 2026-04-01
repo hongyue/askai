@@ -924,12 +924,59 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     backgroundColor: '#141414',
     padding: 1,
   });
-  const modelModalText = Text({
-    id: 'model-modal-text',
+  const modelModalTitleText = Text({
+    id: 'model-modal-title-text',
     content: stringToStyledText(''),
     fg: '#d8d8d8',
   });
-  modelModal.add(modelModalText);
+  modelModal.add(modelModalTitleText);
+  
+  const modelModalContentRow = Box({
+    id: 'model-modal-content-row',
+    width: '100%',
+    height: 'auto',
+    flexDirection: 'row',
+  });
+  
+  const modelModalLeftColumn = Box({
+    id: 'model-modal-left',
+    width: '35%',
+    height: 'auto',
+    flexDirection: 'column',
+    paddingRight: 1,
+    border: ['right'],
+    borderColor: '#444444',
+  });
+  const modelModalProvidersText = Text({
+    id: 'model-modal-providers-text',
+    content: stringToStyledText(''),
+    fg: '#d8d8d8',
+  });
+  modelModalLeftColumn.add(modelModalProvidersText);
+  
+  const modelModalRightColumn = Box({
+    id: 'model-modal-right',
+    flexGrow: 1,
+    height: 'auto',
+    flexDirection: 'column',
+    paddingLeft: 1,
+  });
+  const modelModalFilterText = Text({
+    id: 'model-modal-filter-text',
+    content: stringToStyledText(''),
+    fg: '#d8d8d8',
+  });
+  const modelModalModelsText = Text({
+    id: 'model-modal-models-text',
+    content: stringToStyledText(''),
+    fg: '#d8d8d8',
+  });
+  modelModalRightColumn.add(modelModalFilterText);
+  modelModalRightColumn.add(modelModalModelsText);
+  
+  modelModalContentRow.add(modelModalLeftColumn);
+  modelModalContentRow.add(modelModalRightColumn);
+  modelModal.add(modelModalContentRow);
   
   const inputRow = Box({
     id: 'input-row',
@@ -1012,9 +1059,12 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const liveProviderModal = renderer.root.findDescendantById('provider-modal') as MutableBoxNode | undefined;
   const liveProviderModalText = renderer.root.findDescendantById('provider-modal-text') as MutableTextNode | undefined;
   const liveModelModal = renderer.root.findDescendantById('model-modal') as MutableBoxNode | undefined;
-  const liveModelModalText = renderer.root.findDescendantById('model-modal-text') as MutableTextNode | undefined;
+  const liveModelModalTitleText = renderer.root.findDescendantById('model-modal-title-text') as MutableTextNode | undefined;
+  const liveModelModalProvidersText = renderer.root.findDescendantById('model-modal-providers-text') as MutableTextNode | undefined;
+  const liveModelModalFilterText = renderer.root.findDescendantById('model-modal-filter-text') as MutableTextNode | undefined;
+  const liveModelModalModelsText = renderer.root.findDescendantById('model-modal-models-text') as MutableTextNode | undefined;
 
-  if (!liveCmdListBox || !liveCmdListText || !liveStatusBarText || !liveHeaderText || !liveInput || !liveChat || !liveApprovalDialog || !liveApprovalDialogText || !liveMcpModal || !liveMcpModalText || !liveMcpDetailsModal || !liveMcpDetailsModalText || !liveProviderModal || !liveProviderModalText || !liveModelModal || !liveModelModalText) {
+  if (!liveCmdListBox || !liveCmdListText || !liveStatusBarText || !liveHeaderText || !liveInput || !liveChat || !liveApprovalDialog || !liveApprovalDialogText || !liveMcpModal || !liveMcpModalText || !liveMcpDetailsModal || !liveMcpDetailsModalText || !liveProviderModal || !liveProviderModalText || !liveModelModal || !liveModelModalTitleText || !liveModelModalProvidersText || !liveModelModalFilterText || !liveModelModalModelsText) {
     throw new Error('Failed to initialize TUI render tree');
   }
 
@@ -1033,7 +1083,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const providerModalNode = liveProviderModal;
   const providerModalTextNode = liveProviderModalText;
   const modelModalNode = liveModelModal;
-  const modelModalTextNode = liveModelModalText;
+  const modelModalTitleTextNode = liveModelModalTitleText;
+  const modelModalProvidersTextNode = liveModelModalProvidersText;
+  const modelModalFilterTextNode = liveModelModalFilterText;
+  const modelModalModelsTextNode = liveModelModalModelsText;
 
   providerModalNode.onMouseDown = (event) => {
     if (providerModalOpen && providerFormState) {
@@ -1279,7 +1332,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   function closeModelModal(): void {
     modelModalOpen = false;
     modelModalNode.visible = false;
-    modelModalTextNode.content = stringToStyledText('');
+    modelModalTitleTextNode.content = stringToStyledText('');
+    modelModalProvidersTextNode.content = stringToStyledText('');
+    modelModalFilterTextNode.content = stringToStyledText('');
+    modelModalModelsTextNode.content = stringToStyledText('');
     root.requestRender();
     inputNode.focus();
   }
@@ -1380,7 +1436,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         lines.push(`Error: ${formState.error}`, '');
       }
 
-      lines.push('Tab/↑/↓ move   ←/→ cursor   type/paste to edit   click to place cursor   Enter save   Esc cancel');
+      lines.push('Tab/↑/↓ move   ←/→ cursor   Enter save   Esc cancel');
       providerModalTextNode.content = stringToStyledText(lines.join('\n'));
       providerModalNode.visible = true;
       if (inputNode.blur) {
@@ -1486,32 +1542,39 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return `${prefix} ${model}${active}`;
     });
 
-    const lines = [
-      'Select a model to use',
-      '',
+    const titleContent = ['Select a model to use', ''];
+
+    const providerContent = [
       'Providers',
       ...(modelModalProviderScrollOffset > 0 ? ['  ^ more'] : []),
       ...(providerLines.length > 0 ? providerLines : ['  No providers configured']),
       ...(modelModalProviderScrollOffset + providerModalVisibleItems < providers.length ? ['  v more'] : []),
-      '',
+    ];
+
+    const filterContent = [
       `Filter  ${formatFilterValue(modelModalFilter.value, modelModalFilter.cursorOffset, modelModalFocus === 'filter')}`,
-      '',
+    ];
+
+    const modelContent = [
       `Models${selectedProvider ? ` (${selectedProvider.displayName})` : ''}`,
       ...(modelModalModelScrollOffset > 0 ? ['  ^ more'] : []),
       ...(modelLines.length > 0 ? modelLines : ['  No models available']),
       ...(modelModalModelScrollOffset + providerModalVisibleModels < models.length ? ['  v more'] : []),
-      '',
     ];
 
     if (modelModalNotice) {
-      lines.push(`Notice: ${modelModalNotice}`, '');
+      modelContent.push('', `Notice: ${modelModalNotice}`);
     }
 
     const canDelete = selectedProvider ? isCustomProviderId(selectedProvider.id) && models.length > 0 : false;
-    lines.push(canDelete
-      ? 'Tab switch list   ↑/↓ move   ←/→ cursor in filter   Enter use model   d delete model   Esc/q close'
-      : 'Tab switch list   ↑/↓ move   ←/→ cursor in filter   Enter use model   Esc/q close');
-    modelModalTextNode.content = stringToStyledText(lines.join('\n'));
+    modelContent.push('', canDelete
+      ? 'Tab switch list   ↑/↓ move   Enter use model   d delete model   Esc/q close'
+      : 'Tab switch list   ↑/↓ move   Enter use model   Esc/q close');
+    
+    modelModalTitleTextNode.content = stringToStyledText(titleContent.join('\n'));
+    modelModalProvidersTextNode.content = stringToStyledText(providerContent.join('\n'));
+    modelModalFilterTextNode.content = stringToStyledText(filterContent.join('\n'));
+    modelModalModelsTextNode.content = stringToStyledText(modelContent.join('\n'));
     modelModalNode.visible = true;
     if (inputNode.blur) {
       inputNode.blur();
@@ -1918,10 +1981,6 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return false;
     }
 
-    if (sequence === '\x1b' || sequence.toLowerCase() === 'q') {
-      closeModelModal();
-      return true;
-    }
     if (sequence === '\t') {
       modelModalFocus = modelModalFocus === 'providers'
         ? 'filter'
@@ -1965,6 +2024,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         renderModelModal();
         return true;
       }
+      return true;
+    }
+    if (sequence === '\x1b' || sequence.toLowerCase() === 'q') {
+      closeModelModal();
       return true;
     }
     if (sequence === '\x1b[A') {
