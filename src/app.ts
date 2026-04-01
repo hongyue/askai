@@ -2175,10 +2175,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         renderProviderModal();
         return true;
       }
-      if (sequence.length === 1) {
-        const charCode = sequence.charCodeAt(0);
-        if (charCode >= 32) {
-          insertProviderFormText(sequence);
+      {
+        const char = getChar(sequence);
+        if (char !== null && char.charCodeAt(0) >= 32) {
+          insertProviderFormText(char);
           renderProviderModal();
           return true;
         }
@@ -2221,11 +2221,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         }
         return true;
       }
-      if (sequence.length === 1) {
-        const charCode = sequence.charCodeAt(0);
-        if (charCode >= 32) {
+      {
+        const char = getChar(sequence);
+        if (char !== null && char.charCodeAt(0) >= 32) {
           const input = addProviderNameInput;
-          input.value = input.value.slice(0, input.cursorOffset) + sequence + input.value.slice(input.cursorOffset);
+          input.value = input.value.slice(0, input.cursorOffset) + char + input.value.slice(input.cursorOffset);
           input.cursorOffset++;
           providerModalNotice = null;
           renderProviderModal();
@@ -2343,10 +2343,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         renderModelModal();
         return true;
       }
-      if (sequence.length === 1) {
-        const charCode = sequence.charCodeAt(0);
-        if (charCode >= 32) {
-          insertModelFilterText(sequence);
+      {
+        const char = getChar(sequence);
+        if (char !== null && char.charCodeAt(0) >= 32) {
+          insertModelFilterText(char);
           renderModelModal();
           return true;
         }
