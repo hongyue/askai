@@ -10,9 +10,9 @@ export { AnthropicProvider } from './anthropic';
 export async function createProviderFromConfig(config: ResolvedProviderConfig): Promise<Provider> {
   switch (config.type) {
     case 'openai-compatible':
-      return new OpenAIProvider(config, config.id, config.display_name);
+      return new OpenAIProvider(config, config.id, config.id);
     case 'anthropic':
-      return new AnthropicProvider(config, config.id, config.display_name);
+      return new AnthropicProvider(config, config.id, config.id);
     default:
       throw new Error(`Unknown provider type: ${String(config.type)}`);
   }

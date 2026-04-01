@@ -1,35 +1,53 @@
 {
-  "provider": "custom-1",
+  "provider": "Ollama",
   "allowExecute": true,
   "providers": {
-    "openai": {
+    "OpenAI": {
       "kind": "openai",
-      "display_name": "OpenAI",
       "api_key": "sk-your-openai-key",
       "base_url": "https://api.openai.com/v1",
-      "model": "gpt-4o",
-      "models": ["gpt-4o", "gpt-4o-mini"]
+      "model": "gpt-4o"
     },
-    "openrouter": {
+    "OpenRouter": {
       "kind": "openrouter",
-      "display_name": "OpenRouter",
       "api_key": "sk-or-your-openrouter-key",
       "base_url": "https://openrouter.ai/api/v1",
       "model": "openai/gpt-4o-mini"
     },
-    "anthropic": {
+    "Anthropic": {
       "kind": "anthropic",
-      "display_name": "Anthropic",
       "api_key": "sk-ant-your-anthropic-key",
       "model": "claude-sonnet-4-20250514"
     },
-    "custom-1": {
+    "Llama.cpp": {
       "kind": "custom",
-      "display_name": "Local Ollama",
+      "api_key": "llama.cpp",
+      "base_url": "http://localhost:8080/v1",
+      "model": "llama3"
+    },
+    "SGLang": {
+      "kind": "custom",
+      "api_key": "sglang",
+      "base_url": "http://localhost:8000/v1",
+      "model": "llama3"
+    },
+    "vLLM": {
+      "kind": "custom",
+      "api_key": "vllm",
+      "base_url": "http://localhost:8000/v1",
+      "model": "llama3"
+    },
+    "Ollama": {
+      "kind": "custom",
       "api_key": "ollama",
       "base_url": "http://localhost:11434/v1",
-      "model": "llama3",
-      "models": ["llama3", "qwen2.5-coder"]
+      "model": "llama3"
+    },
+    "My Provider": {
+      "kind": "custom",
+      "api_key": "",
+      "base_url": "http://localhost:8080/v1",
+      "model": "llama3"
     }
   },
   "mcp": {

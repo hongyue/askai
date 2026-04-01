@@ -15,7 +15,7 @@ export class AnthropicProvider implements Provider {
   
   constructor(config: ResolvedProviderConfig, name?: string, label?: string) {
     this.name = name || 'anthropic';
-    this.label = label || config.display_name || this.name;
+    this.label = label || config.id || this.name;
     this.model = config.model;
     this.client = new Anthropic({
       apiKey: config.api_key,

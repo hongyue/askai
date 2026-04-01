@@ -8,9 +8,6 @@ export type ProviderKind = 'openai' | 'openrouter' | 'anthropic' | 'custom';
 
 export interface ProviderConfig {
   kind?: ProviderKind;
-  type?: ProviderType;
-  deployment?: ProviderDeployment;
-  display_name?: string;
   api_key?: string;
   model: string;
   models?: string[];
@@ -49,9 +46,67 @@ export interface Config {
   };
 }
 
-export const presetProviderIds = ['openai', 'anthropic', 'openrouter'] as const;
-export const customProviderIds = ['custom-1', 'custom-2', 'custom-3', 'custom-4', 'custom-5'] as const;
-export const fixedProviderIds = [...presetProviderIds, ...customProviderIds] as const;
+export const presetProviderIds = ['openai', 'anthropic', 'openrouter', 'ollama', 'llama.cpp', 'vllm', 'sglang'] as const;
+
+// Normalize provider ID for case-insensitive comparison
+export function normalizeProviderId(id: string): string {
+  return id.trim().toLowerCase();
+}
+
+// Check if a provider ID is a preset (case-insensitive)
+export function isPresetProviderId(id: string): boolean {
+  const normalized = normalizeProviderId(id);
+  return presetProviderIds.some(presetId => normalizeProviderId(presetId) === normalized);
+}
+
+// Find provider by case-insensitive match
+export function findProviderByNormalizedId(config: Config, searchId: string): string | undefined {
+  const normalizedSearch = normalizeProviderId(searchId);
+  return Object.keys(config.providers).find(id => normalizeProviderId(id) === normalizedSearch);
+}
+
+// Check if provider ID is unique (case-insensitive)
+export function isProviderIdUnique(config: Config, id: string, excludeId?: string): boolean {
+  const normalized = normalizeProviderId(id);
+  return !Object.keys(config.providers).some(existingId => {
+    if (excludeId && normalizeProviderId(existingId) === normalizeProviderId(excludeId)) {
+      return false;
+    }
+    return normalizeProviderId(existingId) === normalized;
+  });
+}
+
+// Rename a provider (update config key)
+export function renameProvider(config: Config, oldId: string, newId: string): void {
+  const trimmedNewId = newId.trim();
+  if (!trimmedNewId) {
+    throw new Error('Provider ID cannot be empty');
+  }
+
+  // Validate uniqueness
+  if (!isProviderIdUnique(config, trimmedNewId, oldId)) {
+    throw new Error(`Provider "${trimmedNewId}" already exists`);
+  }
+
+  // Validate preset providers can't be renamed
+  if (isPresetProviderId(oldId)) {
+    throw new Error('Cannot rename preset providers');
+  }
+
+  // Can't rename to a preset ID
+  if (isPresetProviderId(trimmedNewId)) {
+    throw new Error('Cannot use preset provider ID');
+  }
+
+  // Copy provider config to new key
+  config.providers[trimmedNewId] = config.providers[oldId];
+  delete config.providers[oldId];
+
+  // Update active provider if needed
+  if (config.provider === oldId) {
+    config.provider = trimmedNewId;
+  }
+}
 
 const DEFAULT_CONFIG_PATH = join(homedir(), '.askai', 'settings.json');
 
@@ -69,18 +124,6 @@ const legacyProviderDefaults: Record<string, { kind: ProviderKind; type: Provide
     type: 'openai-compatible',
     deployment: 'hosted',
     base_url: 'https://openrouter.ai/api/v1',
-  },
-  ollama: {
-    kind: 'custom',
-    type: 'openai-compatible',
-    deployment: 'self-hosted',
-    base_url: 'http://localhost:11434/v1',
-  },
-  'llama.cpp': {
-    kind: 'custom',
-    type: 'openai-compatible',
-    deployment: 'self-hosted',
-    base_url: 'http://localhost:8080/v1',
   },
   anthropic: {
     kind: 'anthropic',
@@ -142,8 +185,8 @@ export function resolveProviderConfig(config: Config, providerId?: string): Reso
 
   const inferredDefaults = inferProviderDefaults(id, providerConfig);
   const kind = providerConfig.kind || inferredDefaults.kind;
-  const type = providerConfig.type || inferredDefaults.type;
-  const deployment = providerConfig.deployment || inferredDefaults.deployment;
+  const type = inferredDefaults.type;
+  const deployment = inferredDefaults.deployment;
 
   if (type === 'anthropic') {
     if (!providerConfig.api_key || typeof providerConfig.api_key !== 'string') {
@@ -201,9 +244,6 @@ export function createProviderConfig(
 
   return {
     kind: input.kind || inferredDefaults.kind,
-    type: input.type || inferredDefaults.type,
-    deployment: input.deployment || inferredDefaults.deployment,
-    display_name: input.display_name?.trim() || undefined,
     api_key: typeof input.api_key === 'string' ? input.api_key : undefined,
     base_url: input.base_url?.trim() || inferredDefaults.base_url,
     model: input.model.trim(),
@@ -269,7 +309,7 @@ export function setActiveProvider(config: Config, providerId: string): void {
 }
 
 export function getProviderLabel(provider: ResolvedProviderConfig): string {
-  return provider.display_name?.trim() || provider.id;
+  return provider.id;
 }
 
 export function normalizeModelList(value: string): string[] {
@@ -310,10 +350,7 @@ function validateConfig(config: unknown): Config {
     }
 
     sourceProviders[providerId] = createProviderConfig(providerId, {
-      type: providerConfig.type as ProviderType | undefined,
       kind: providerConfig.kind as ProviderKind | undefined,
-      deployment: providerConfig.deployment as ProviderDeployment | undefined,
-      display_name: providerConfig.display_name as string | undefined,
       api_key: providerConfig.api_key as string | undefined,
       model: providerConfig.model,
       models: Array.isArray(providerConfig.models)
@@ -349,58 +386,30 @@ function normalizeProviders(sourceProviders: Record<string, ProviderConfig>, req
   activeProviderId: string;
 } {
   const providers: Config['providers'] = {};
-  const usedSourceIds = new Set<string>();
   const sourceToCanonical = new Map<string, string>();
 
+  // First pass: match preset providers (case-insensitive)
   for (const presetId of presetProviderIds) {
     const sourceId = findPresetSourceProviderId(sourceProviders, presetId);
     if (!sourceId) {
       continue;
     }
 
-    providers[presetId] = createProviderConfig(presetId, sourceProviders[sourceId]);
-    usedSourceIds.add(sourceId);
-    sourceToCanonical.set(sourceId, presetId);
-    sourceToCanonical.set(presetId, presetId);
+    // Preserve the original case from the source config
+    providers[sourceId] = createProviderConfig(sourceId, sourceProviders[sourceId]);
+    sourceToCanonical.set(sourceId, sourceId);
+    sourceToCanonical.set(presetId, sourceId); // Map lowercase preset ID to actual source ID
   }
 
-  let customIndex = 0;
-  for (const customId of customProviderIds) {
-    const sourceId = sourceProviders[customId] ? customId : undefined;
-    if (!sourceId || usedSourceIds.has(sourceId)) {
-      continue;
-    }
-    providers[customId] = createProviderConfig(customId, sourceProviders[sourceId]);
-    usedSourceIds.add(sourceId);
-    sourceToCanonical.set(sourceId, customId);
-    sourceToCanonical.set(customId, customId);
-    customIndex += 1;
-  }
-
-  for (const sourceId of Object.keys(sourceProviders)) {
-    if (usedSourceIds.has(sourceId)) {
-      continue;
+  // Second pass: add all other providers as-is (custom providers)
+  for (const [sourceId, sourceConfig] of Object.entries(sourceProviders)) {
+    if (sourceToCanonical.has(sourceId)) {
+      continue; // Already matched as preset
     }
 
-    const sourceConfig = sourceProviders[sourceId];
-    const inferred = inferProviderDefaults(sourceId, sourceConfig);
-    if (inferred.kind !== 'custom') {
-      continue;
-    }
-
-    if (customIndex >= customProviderIds.length) {
-      break;
-    }
-
-    const canonicalId = customProviderIds[customIndex];
-    if (providers[canonicalId]) {
-      customIndex += 1;
-      continue;
-    }
-    providers[canonicalId] = createProviderConfig(canonicalId, sourceConfig);
-    usedSourceIds.add(sourceId);
-    sourceToCanonical.set(sourceId, canonicalId);
-    customIndex += 1;
+    // Keep the original ID for custom providers
+    providers[sourceId] = createProviderConfig(sourceId, sourceConfig);
+    sourceToCanonical.set(sourceId, sourceId);
   }
 
   const requestedCanonicalId = sourceToCanonical.get(requestedActiveProviderId) || requestedActiveProviderId;
@@ -416,13 +425,18 @@ function normalizeProviders(sourceProviders: Record<string, ProviderConfig>, req
 }
 
 function findPresetSourceProviderId(sourceProviders: Record<string, ProviderConfig>, presetId: typeof presetProviderIds[number]): string | undefined {
-  if (sourceProviders[presetId]) {
-    return presetId;
+  // Case-insensitive exact match
+  const normalizedPresetId = presetId.toLowerCase();
+  for (const sourceId of Object.keys(sourceProviders)) {
+    if (sourceId.toLowerCase() === normalizedPresetId) {
+      return sourceId;
+    }
   }
 
+  // Fallback: match by kind
   return Object.keys(sourceProviders).find(sourceId => {
     const sourceConfig = sourceProviders[sourceId];
-    return inferProviderDefaults(sourceId, sourceConfig).kind === presetId;
+    return sourceConfig.kind === presetId;
   });
 }
 
@@ -444,20 +458,11 @@ function inferProviderDefaults(providerId: string, providerConfig: ProviderConfi
       default:
         return {
           kind: 'custom',
-          type: providerConfig.type || 'openai-compatible',
-          deployment: providerConfig.deployment || (providerConfig.base_url ? 'self-hosted' : 'hosted'),
+          type: 'openai-compatible',
+          deployment: providerConfig.base_url ? 'self-hosted' : 'hosted',
           base_url: providerConfig.base_url,
         };
     }
-  }
-
-  if (providerConfig.type) {
-    return {
-      kind: providerConfig.type === 'anthropic' ? 'anthropic' : inferKindFromProviderId(providerId, providerConfig.base_url),
-      type: providerConfig.type,
-      deployment: providerConfig.deployment || (providerConfig.type === 'anthropic' ? 'hosted' : 'hosted'),
-      base_url: providerConfig.base_url || (providerConfig.type === 'anthropic' ? 'https://api.anthropic.com' : undefined),
-    };
   }
 
   const legacyDefaults = legacyProviderDefaults[providerId];

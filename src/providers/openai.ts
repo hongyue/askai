@@ -11,7 +11,7 @@ export class OpenAIProvider implements Provider {
   
   constructor(config: ResolvedProviderConfig, name?: string, label?: string) {
     this.name = name || 'openai';
-    this.label = label || config.display_name || this.name;
+    this.label = label || config.id || this.name;
     this.model = config.model;
     this.client = new OpenAI({
       apiKey: config.api_key,

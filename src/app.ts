@@ -7,11 +7,14 @@ import {
   BoxRenderable 
 } from "@opentui/core"
 import {
-  customProviderIds,
-  fixedProviderIds,
+  findProviderByNormalizedId,
   getProviderLabel,
+  isPresetProviderId,
+  isProviderIdUnique,
   loadConfig,
+  presetProviderIds,
   removeProviderModel,
+  renameProvider,
   resolveConfigPath,
   resolveProviderConfig,
   saveConfig,
@@ -164,7 +167,7 @@ const approvalActions = [
 const providerModalVisibleItems = 8;
 const providerModalVisibleModels = 8;
 const providerFormFields: ProviderFormField[] = [
-  { key: 'display_name', label: 'Display Name', kind: 'text' },
+  { key: 'id', label: 'Provider Name', kind: 'text' },
   { key: 'api_key', label: 'API Key', kind: 'text' },
   { key: 'base_url', label: 'Base URL', kind: 'text' },
   { key: 'model', label: 'Model Name', kind: 'text' },
@@ -174,6 +177,10 @@ const presetProviderMeta = [
   { id: 'openai', displayName: 'OpenAI', kind: 'openai' as const, baseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o' },
   { id: 'anthropic', displayName: 'Anthropic', kind: 'anthropic' as const, baseUrl: 'https://api.anthropic.com', defaultModel: 'claude-sonnet-4-20250514' },
   { id: 'openrouter', displayName: 'OpenRouter', kind: 'openrouter' as const, baseUrl: 'https://openrouter.ai/api/v1', defaultModel: 'openai/gpt-4o-mini' },
+  { id: 'ollama', displayName: 'Ollama', kind: 'custom' as const, baseUrl: 'http://localhost:11434/v1', defaultModel: 'llama3' },
+  { id: 'llama.cpp', displayName: 'Llama.cpp', kind: 'custom' as const, baseUrl: 'http://localhost:8080/v1', defaultModel: 'llama3' },
+  { id: 'vllm', displayName: 'vLLM', kind: 'custom' as const, baseUrl: 'http://localhost:8000/v1', defaultModel: 'llama3' },
+  { id: 'sglang', displayName: 'SGLang', kind: 'custom' as const, baseUrl: 'http://localhost:8080/v1', defaultModel: 'llama3' },
 ] as const;
 const promptAccentBorderChars = {
   topLeft: '▌',
@@ -237,7 +244,11 @@ async function initializeRuntime(options: RunAppOptions): Promise<{
   const configPath = resolveConfigPath(options.configPath);
   const config = await loadConfig(configPath);
   if (options.providerName) {
-    setActiveProvider(config, options.providerName);
+    const providerId = findProviderByNormalizedId(config, options.providerName);
+    if (!providerId) {
+      throw new Error(`Provider "${options.providerName}" not found`);
+    }
+    setActiveProvider(config, providerId);
   }
   if (options.modelName) {
     setProviderModel(config, config.provider, options.modelName);
@@ -345,7 +356,7 @@ function getProviderSummary(provider: ResolvedProviderConfig): string {
 
 function normalizeProviderFormValues(values: Record<string, string>): Record<string, string> {
   const nextValues = { ...values };
-  nextValues.display_name = nextValues.display_name || '';
+  nextValues.id = nextValues.id || '';
   nextValues.api_key = nextValues.api_key || '';
   nextValues.base_url = nextValues.base_url || '';
   nextValues.model = nextValues.model || '';
@@ -380,27 +391,32 @@ function filterModels(models: string[], filterValue: string): string[] {
 }
 
 function getVisibleProviderFormFields(providerId: string): ProviderFormField[] {
-  const isCustomProvider = customProviderIds.includes(providerId as typeof customProviderIds[number]);
+  const preset = getPresetProviderMeta(providerId);
+  const isCustomLike = !preset || preset.kind === 'custom';
+  const isCustomProvider = !preset;  // Only true custom providers (not presets)
+  
   return providerFormFields.filter(field => {
-    if (field.key === 'display_name') {
-      return isCustomProvider;
+    if (field.key === 'id') {
+      return isCustomProvider;  // Only show for custom providers
     }
     if (field.key === 'base_url') {
-      return isCustomProvider;
+      return isCustomLike;
     }
     if (field.key === 'model') {
-      return isCustomProvider;
+      return isCustomLike;
     }
     return field.key === 'api_key';
   });
 }
 
 function isCustomProviderId(providerId: string): boolean {
-  return customProviderIds.includes(providerId as typeof customProviderIds[number]);
+  // A provider is custom only if it's NOT a preset
+  return !isPresetProviderId(providerId);
 }
 
 function getPresetProviderMeta(providerId: string) {
-  return presetProviderMeta.find(item => item.id === providerId);
+  const normalizedId = providerId.toLowerCase();
+  return presetProviderMeta.find(item => item.id.toLowerCase() === normalizedId);
 }
 
 function getProviderPlaceholderLabel(providerId: string): string {
@@ -408,8 +424,7 @@ function getProviderPlaceholderLabel(providerId: string): string {
   if (preset) {
     return preset.displayName;
   }
-  const customIndex = customProviderIds.findIndex(id => id === providerId);
-  return customIndex >= 0 ? `Custom ${customIndex + 1}` : providerId;
+  return providerId;
 }
 
 function formatApprovalDialogCommand(block: CommandBlock): string {
@@ -550,6 +565,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   let providerFormState: ProviderFormState | null = null;
   let providerModalNotice: string | null = null;
   let modelModalNotice: string | null = null;
+  let addProviderNameInput: { value: string; cursorOffset: number } | null = null;
+  let deleteProviderConfirm: { providerId: string } | null = null;
   const commands = createCommands(
     state,
     () => {
@@ -1197,11 +1214,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   }
 
   function getProviderSlots(): ProviderSlot[] {
-    return fixedProviderIds.map((providerId) => {
+    const slots: ProviderSlot[] = [];
+    const addedNormalizedIds = new Set<string>();
+    
+    // First add all preset providers
+    for (const preset of presetProviderMeta) {
+      // Find actual config key (case-insensitive) to preserve original case
+      const configKey = Object.keys(config.providers).find(
+        k => k.toLowerCase() === preset.id.toLowerCase()
+      );
+      const providerId = configKey || preset.id;
+      addedNormalizedIds.add(providerId.toLowerCase());
+      
       const storedProvider = config.providers[providerId];
       if (storedProvider) {
         const resolvedConfig = resolveProviderConfig(config, providerId);
-        return {
+        slots.push({
           id: providerId,
           displayName: getProviderLabel(resolvedConfig),
           kind: resolvedConfig.kind,
@@ -1211,21 +1239,40 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
           model: resolvedConfig.model,
           models: Array.from(new Set((resolvedConfig.models && resolvedConfig.models.length > 0 ? resolvedConfig.models : [resolvedConfig.model]).filter(Boolean))),
           resolved: resolvedConfig,
-        };
+        });
+      } else {
+        slots.push({
+          id: providerId,
+          displayName: preset.displayName,
+          kind: preset.kind,
+          configured: false,
+          apiKeyConfigured: false,
+          baseUrl: preset.baseUrl,
+          model: preset.defaultModel,
+          models: [],
+        });
       }
-
-      const preset = getPresetProviderMeta(providerId);
-      return {
+    }
+    
+    // Then add custom providers from config (not presets)
+    for (const [providerId, providerConfig] of Object.entries(config.providers)) {
+      if (addedNormalizedIds.has(providerId.toLowerCase())) continue;
+      
+      const resolvedConfig = resolveProviderConfig(config, providerId);
+      slots.push({
         id: providerId,
-        displayName: getProviderPlaceholderLabel(providerId),
-        kind: preset?.kind || 'custom',
-        configured: false,
-        apiKeyConfigured: false,
-        baseUrl: preset?.baseUrl,
-        model: preset?.defaultModel,
-        models: [],
-      };
-    });
+        displayName: getProviderLabel(resolvedConfig),
+        kind: resolvedConfig.kind,
+        configured: true,
+        apiKeyConfigured: Boolean(resolvedConfig.api_key),
+        baseUrl: resolvedConfig.base_url,
+        model: resolvedConfig.model,
+        models: Array.from(new Set((resolvedConfig.models && resolvedConfig.models.length > 0 ? resolvedConfig.models : [resolvedConfig.model]).filter(Boolean))),
+        resolved: resolvedConfig,
+      });
+    }
+    
+    return slots;
   }
 
   function getSelectedProviderSlot(): ProviderSlot | undefined {
@@ -1262,7 +1309,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
   function createProviderFormState(providerSlot: ProviderSlot): ProviderFormState {
     const values = normalizeProviderFormValues({
-      display_name: providerSlot.kind === 'custom' ? providerSlot.displayName : getProviderPlaceholderLabel(providerSlot.id),
+      id: providerSlot.id,
       api_key: providerSlot.resolved?.api_key || '',
       base_url: providerSlot.resolved?.base_url || providerSlot.baseUrl || '',
       model: providerSlot.resolved?.model || providerSlot.model || '',
@@ -1279,11 +1326,26 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   function getProviderFormConfig(providerId: string, values: Record<string, string>, previousProvider?: ProviderConfig): ProviderConfig {
     const preset = getPresetProviderMeta(providerId);
     if (preset) {
+      // For preset providers with kind 'custom' (like Ollama, Llama.cpp), use form values
+      if (preset.kind === 'custom') {
+        const nextModel = values.model.trim() || preset.defaultModel;
+        const nextModels = Array.from(new Set([
+          nextModel,
+          ...(previousProvider?.models || []),
+          previousProvider?.model || '',
+        ].map(item => item.trim()).filter(Boolean)));
+
+        return {
+          kind: preset.kind,
+          api_key: values.api_key.trim() || undefined,
+          base_url: values.base_url.trim() || preset.baseUrl,
+          model: nextModel,
+          models: nextModels.length > 0 ? nextModels : undefined,
+        };
+      }
+      // For cloud presets (OpenAI, Anthropic, OpenRouter), use preset values
       return {
         kind: preset.kind,
-        type: preset.kind === 'anthropic' ? 'anthropic' : 'openai-compatible',
-        deployment: 'hosted',
-        display_name: preset.displayName,
         api_key: values.api_key.trim() || undefined,
         base_url: preset.baseUrl,
         model: previousProvider?.model || preset.defaultModel,
@@ -1292,7 +1354,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
 
     const nextModel = values.model.trim();
-    if (!values.display_name.trim()) {
+    if (!values.id.trim()) {
       throw new Error('Provider name is required for custom providers.');
     }
     if (!values.base_url.trim()) {
@@ -1310,9 +1372,6 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
     return {
       kind: 'custom',
-      type: 'openai-compatible',
-      deployment: 'self-hosted',
-      display_name: values.display_name.trim(),
       api_key: values.api_key.trim() || undefined,
       base_url: values.base_url.trim(),
       model: nextModel,
@@ -1323,10 +1382,84 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   function closeProviderModal(): void {
     providerModalOpen = false;
     providerFormState = null;
+    addProviderNameInput = null;
+    deleteProviderConfirm = null;
     providerModalNode.visible = false;
     providerModalTextNode.content = stringToStyledText('');
     root.requestRender();
     inputNode.focus();
+  }
+
+  function startAddProvider(): void {
+    addProviderNameInput = { value: '', cursorOffset: 0 };
+    providerModalNotice = null;
+    renderProviderModal();
+  }
+
+  function showDeleteProviderConfirmation(providerId: string): void {
+    deleteProviderConfirm = { providerId };
+    providerModalNotice = null;
+    renderProviderModal();
+  }
+
+  async function deleteCustomProvider(providerId: string): Promise<void> {
+    if (!isCustomProviderId(providerId)) {
+      return;
+    }
+
+    delete config.providers[providerId];
+    
+    if (config.provider === providerId) {
+      const remaining = Object.keys(config.providers);
+      if (remaining.length > 0) {
+        config.provider = remaining[0];
+        await runtime.switchProvider(config.provider, false);
+      } else {
+        config.provider = '';
+      }
+    }
+
+    await runtime.persistConfig();
+    providerModalNotice = `Deleted provider ${providerId}.`;
+    deleteProviderConfirm = null;
+    syncProviderModalSelections(config.provider);
+    await refreshActiveProviderView();
+    renderProviderModal();
+  }
+
+  async function addCustomProvider(name: string): Promise<void> {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      providerModalNotice = 'Provider name cannot be empty.';
+      renderProviderModal();
+      return;
+    }
+
+    if (!isProviderIdUnique(config, trimmedName)) {
+      providerModalNotice = `Provider "${trimmedName}" already exists. Please use a unique name.`;
+      renderProviderModal();
+      return;
+    }
+
+    if (isPresetProviderId(trimmedName)) {
+      providerModalNotice = 'Cannot use a preset provider name.';
+      renderProviderModal();
+      return;
+    }
+
+    config.providers[trimmedName] = {
+      kind: 'custom',
+      api_key: '',
+      base_url: 'http://localhost:8080/v1',
+      model: 'llama3',
+    };
+
+    await runtime.persistConfig();
+    addProviderNameInput = null;
+    providerModalNotice = `Created provider "${trimmedName}".`;
+    syncProviderModalSelections(trimmedName);
+    await refreshActiveProviderView();
+    startProviderForm(trimmedName);
   }
 
   function closeModelModal(): void {
@@ -1417,6 +1550,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     const providers = getProviderSlots();
     const selectedProvider = getSelectedProviderSlot();
 
+    // Handle provider form edit state
     if (providerFormState) {
       const formState = providerFormState;
       const visibleFields = getVisibleProviderFormFields(formState.providerId);
@@ -1446,6 +1580,45 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return;
     }
 
+    // Handle add provider name input state
+    if (addProviderNameInput) {
+      const nameInput = addProviderNameInput;
+      const value = formatProviderFormTextValue(nameInput.value, nameInput.cursorOffset);
+      const lines = [
+        'Add new provider',
+        '',
+        `Provider name: ${value || '(enter name)'}`,
+        '',
+        ...(providerModalNotice ? [`Error: ${providerModalNotice}`, ''] : []),
+        'Enter confirm   Esc cancel',
+      ];
+      providerModalTextNode.content = stringToStyledText(lines.join('\n'));
+      providerModalNode.visible = true;
+      if (inputNode.blur) {
+        inputNode.blur();
+      }
+      root.requestRender();
+      return;
+    }
+
+    // Handle delete provider confirmation state
+    if (deleteProviderConfirm) {
+      const lines = [
+        'Delete provider',
+        '',
+        `Delete "${deleteProviderConfirm.providerId}"? This will remove the provider and all its models.`,
+        '',
+        'y confirm   n/Esc cancel',
+      ];
+      providerModalTextNode.content = stringToStyledText(lines.join('\n'));
+      providerModalNode.visible = true;
+      if (inputNode.blur) {
+        inputNode.blur();
+      }
+      root.requestRender();
+      return;
+    }
+
     providerModalProviderScrollOffset = clampScrollOffset(
       providerModalProviderIndex,
       providerModalProviderScrollOffset,
@@ -1463,16 +1636,19 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       const active = item.id === resolvedProvider.id ? ' *' : '';
       const prefix = index === providerModalProviderIndex ? `[${marker}]` : ` ${marker} `;
       const status = item.configured ? (item.apiKeyConfigured || item.kind === 'custom' ? 'configured' : 'needs key') : 'empty';
-      return `${prefix} ${item.displayName} • ${item.kind}${active} • ${status}`;
+      return `${prefix} ${item.displayName}`;
     });
 
     const summaryLines = selectedProvider ? [
       `Provider: ${selectedProvider.displayName}`,
       `Current model: ${selectedProvider.model || 'not set'}`,
       `Base URL: ${selectedProvider.baseUrl || 'n/a'}`,
-      `API Key: ${selectedProvider.apiKeyConfigured ? 'configured' : 'missing'}`,
-      `State: ${selectedProvider.configured ? 'saved' : 'not configured'}`,
     ] : ['No provider selected.'];
+
+    const canDelete = selectedProvider && isCustomProviderId(selectedProvider.id);
+    const helpText = canDelete
+      ? '↑/↓ move   Enter edit   +/a add   d delete   m models   Esc/q close'
+      : '↑/↓ move   Enter edit   +/a add   m models   Esc/q close';
 
     const lines = [
       'Configure providers',
@@ -1486,7 +1662,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       ...summaryLines,
       '',
       ...(providerModalNotice ? [`Notice: ${providerModalNotice}`, ''] : []),
-      '↑/↓ move   Enter edit provider   m select model   Esc/q close',
+      helpText,
     ];
 
     providerModalTextNode.content = stringToStyledText(lines.join('\n'));
@@ -1566,7 +1742,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       modelContent.push('', `Notice: ${modelModalNotice}`);
     }
 
-    const canDelete = selectedProvider ? isCustomProviderId(selectedProvider.id) && models.length > 0 : false;
+    const canDelete = selectedProvider ? models.length > 1 : false;
     modelContent.push('', canDelete
       ? 'Tab switch list   ↑/↓ move   Enter use model   d delete model   Esc/q close'
       : 'Tab switch list   ↑/↓ move   Enter use model   Esc/q close');
@@ -1599,45 +1775,51 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     const formState = providerFormState;
 
     try {
-      const providerId = formState.providerId;
-      const previousProviderConfig = config.providers[providerId];
-      const nextConfig = getProviderFormConfig(providerId, formState.values, previousProviderConfig);
+      const originalId = formState.providerId;
+      const newId = formState.values.id?.trim() || originalId;
+      const previousProviderConfig = config.providers[originalId];
+      const nextConfig = getProviderFormConfig(originalId, formState.values, previousProviderConfig);
 
-      if (!isCustomProviderId(providerId) && !nextConfig.api_key) {
+      if (!isCustomProviderId(originalId) && !nextConfig.api_key) {
         throw new Error('API key is required for preset providers.');
       }
 
-      upsertProvider(config, providerId, nextConfig);
-
-      providerModalNotice = null;
-      if (resolvedProvider.id === providerId) {
-        await runtime.switchProvider(providerId, false);
+      // Handle rename for custom providers
+      if (isCustomProviderId(originalId) && newId !== originalId) {
+        renameProvider(config, originalId, newId);
       }
 
-      if (!isCustomProviderId(providerId)) {
+      upsertProvider(config, newId, nextConfig);
+
+      providerModalNotice = null;
+      if (resolvedProvider.id === newId) {
+        await runtime.switchProvider(newId, false);
+      }
+
+      if (!isCustomProviderId(newId)) {
         try {
-          const fetchedModels = await fetchAvailableModels(resolveProviderConfig(config, providerId));
+          const fetchedModels = await fetchAvailableModels(resolveProviderConfig(config, newId));
           if (fetchedModels.length > 0) {
-            const currentModel = config.providers[providerId].model;
+            const currentModel = config.providers[newId].model;
             const orderedModels = currentModel && fetchedModels.includes(currentModel)
               ? [currentModel, ...fetchedModels.filter(model => model !== currentModel)]
               : fetchedModels;
-            config.providers[providerId].models = orderedModels;
-            config.providers[providerId].model = orderedModels[0];
-            providerModalNotice = `Fetched ${fetchedModels.length} models for ${getProviderLabel(resolveProviderConfig(config, providerId))}.`;
+            config.providers[newId].models = orderedModels;
+            config.providers[newId].model = orderedModels[0];
+            providerModalNotice = `Fetched ${fetchedModels.length} models for ${getProviderLabel(resolveProviderConfig(config, newId))}.`;
           } else {
-            providerModalNotice = `Saved provider. No models were returned for ${getProviderPlaceholderLabel(providerId)}.`;
+            providerModalNotice = `Saved provider. No models were returned for ${getProviderPlaceholderLabel(newId)}.`;
           }
         } catch (error) {
           providerModalNotice = `Saved provider. Failed to refresh models: ${error instanceof Error ? error.message : 'Unknown error'}`;
         }
       } else {
-        providerModalNotice = `Saved ${formState.values.display_name.trim() || getProviderPlaceholderLabel(providerId)}.`;
+        providerModalNotice = `Saved ${newId}.`;
       }
 
       await runtime.persistConfig();
       providerFormState = null;
-      syncProviderModalSelections(providerId);
+      syncProviderModalSelections(newId);
       await refreshActiveProviderView();
       renderProviderModal();
     } catch (error) {
@@ -1674,10 +1856,15 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
   async function deleteSelectedCustomModel(): Promise<void> {
     const selectedProvider = getSelectedModelModalProvider();
-    if (!selectedProvider || !isCustomProviderId(selectedProvider.id)) {
+    if (!selectedProvider) {
       return;
     }
     const models = getModelModalModels(selectedProvider);
+    if (models.length <= 1) {
+      modelModalNotice = 'Cannot delete the only model for this provider.';
+      renderModelModal();
+      return;
+    }
     const selectedModel = models[modelModalModelIndex];
     if (!selectedModel) {
       return;
@@ -1884,6 +2071,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return false;
     }
 
+    // Handle provider form edit state
     if (providerFormState) {
       if (sequence === '\x1b') {
         providerFormState = null;
@@ -1939,6 +2127,76 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return true;
     }
 
+    // Handle add provider name input state
+    if (addProviderNameInput) {
+      if (sequence === '\x1b') {
+        addProviderNameInput = null;
+        providerModalNotice = null;
+        renderProviderModal();
+        return true;
+      }
+      if (sequence === '\r' || sequence === '\n') {
+        await addCustomProvider(addProviderNameInput.value);
+        return true;
+      }
+      if (sequence === '\x1b[D') {
+        addProviderNameInput.cursorOffset = Math.max(0, addProviderNameInput.cursorOffset - 1);
+        renderProviderModal();
+        return true;
+      }
+      if (sequence === '\x1b[C') {
+        addProviderNameInput.cursorOffset = Math.min(addProviderNameInput.value.length, addProviderNameInput.cursorOffset + 1);
+        renderProviderModal();
+        return true;
+      }
+      if (sequence === '\x7f') {
+        const input = addProviderNameInput;
+        if (input.cursorOffset > 0) {
+          input.value = input.value.slice(0, input.cursorOffset - 1) + input.value.slice(input.cursorOffset);
+          input.cursorOffset--;
+          renderProviderModal();
+        }
+        return true;
+      }
+      if (sequence.length === 1) {
+        const charCode = sequence.charCodeAt(0);
+        if (charCode >= 32) {
+          const input = addProviderNameInput;
+          input.value = input.value.slice(0, input.cursorOffset) + sequence + input.value.slice(input.cursorOffset);
+          input.cursorOffset++;
+          providerModalNotice = null;
+          renderProviderModal();
+          return true;
+        }
+      }
+      if (sequence.length > 1 && !sequence.includes('\x1b')) {
+        const normalizedText = sequence.replace(/\r\n/g, '\n').replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '').replace(/\n/g, ' ');
+        if (normalizedText) {
+          const input = addProviderNameInput;
+          input.value = input.value.slice(0, input.cursorOffset) + normalizedText + input.value.slice(input.cursorOffset);
+          input.cursorOffset += normalizedText.length;
+          providerModalNotice = null;
+          renderProviderModal();
+        }
+        return true;
+      }
+      return true;
+    }
+
+    // Handle delete provider confirmation state
+    if (deleteProviderConfirm) {
+      if (sequence.toLowerCase() === 'y') {
+        await deleteCustomProvider(deleteProviderConfirm.providerId);
+        return true;
+      }
+      if (sequence === '\x1b' || sequence.toLowerCase() === 'n') {
+        deleteProviderConfirm = null;
+        renderProviderModal();
+        return true;
+      }
+      return true;
+    }
+
     if (sequence === '\x1b' || sequence.toLowerCase() === 'q') {
       closeProviderModal();
       return true;
@@ -1969,6 +2227,17 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       const selectedProvider = getSelectedProviderSlot();
       if (selectedProvider) {
         startProviderForm(selectedProvider.id);
+      }
+      return true;
+    }
+    if (sequence === '+' || sequence.toLowerCase() === 'a') {
+      startAddProvider();
+      return true;
+    }
+    if (sequence.toLowerCase() === 'd') {
+      const selectedProvider = getSelectedProviderSlot();
+      if (selectedProvider && isCustomProviderId(selectedProvider.id)) {
+        showDeleteProviderConfirmation(selectedProvider.id);
       }
       return true;
     }
