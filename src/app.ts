@@ -158,6 +158,69 @@ const shiftEnterSequences = new Set([
   '\x1b[27;2;13~',
   '\x1b[13;2~',
 ]);
+
+// Helper functions for matching keyboard sequences (supports both traditional and Kitty protocol)
+function isEnter(sequence: string): boolean {
+  return sequence === '\r' || sequence === '\n' || sequence === '\x1b[13u' || sequence === '\x1b[13;1u';
+}
+
+function isEscape(sequence: string): boolean {
+  return sequence === '\x1b' || sequence === '\x1b\x1b' || sequence === '\x1b[27u' || sequence === '\x1b[27;1u';
+}
+
+function isArrowUp(sequence: string): boolean {
+  return sequence === '\x1b[A' || sequence === '\x1b[Au' || sequence === '\x1b[57352u';
+}
+
+function isArrowDown(sequence: string): boolean {
+  return sequence === '\x1b[B' || sequence === '\x1b[Bu' || sequence === '\x1b[57353u';
+}
+
+function isArrowLeft(sequence: string): boolean {
+  return sequence === '\x1b[D' || sequence === '\x1b[Du' || sequence === '\x1b[57350u';
+}
+
+function isArrowRight(sequence: string): boolean {
+  return sequence === '\x1b[C' || sequence === '\x1b[Cu' || sequence === '\x1b[57351u';
+}
+
+function isTab(sequence: string): boolean {
+  return sequence === '\t' || sequence === '\x1b[Iu' || sequence === '\x1b[9u';
+}
+
+function isShiftTab(sequence: string): boolean {
+  return sequence === '\x1b[Z' || sequence === '\x1b[I;2u' || sequence === '\x1b[9;2u';
+}
+
+function isBackspace(sequence: string): boolean {
+  return sequence === '\x7f' || sequence === '\x1b[127u' || sequence === '\b';
+}
+
+// Helper to get character from sequence (handles both plain and Kitty protocol)
+function getChar(sequence: string): string | null {
+  // Plain character
+  if (sequence.length === 1) {
+    return sequence;
+  }
+  // Kitty protocol: \x1b{code}u or \x1b{code};{mods}u
+  const kittyMatch = sequence.match(/^\x1b\[(\d+)(?:;\d+)?u$/);
+  if (kittyMatch) {
+    return String.fromCharCode(parseInt(kittyMatch[1], 10));
+  }
+  return null;
+}
+
+// Helper to check if sequence matches a specific character
+function isChar(sequence: string, char: string): boolean {
+  const c = getChar(sequence);
+  return c !== null && c === char;
+}
+
+// Helper to check if sequence matches a character (case-insensitive)
+function isCharIgnoreCase(sequence: string, char: string): boolean {
+  const c = getChar(sequence);
+  return c !== null && c.toLowerCase() === char.toLowerCase();
+}
 const approvalActions = [
   { key: 'y', label: 'Yes' },
   { key: 'n', label: 'No' },
@@ -624,16 +687,16 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       const detailLineCount = getMcpDetailsContentLines(selectedState).length;
       const maxOffset = Math.max(0, detailLineCount - mcpDetailsVisibleLineCount);
 
-      if (sequence === '\x1b' || sequence.toLowerCase() === 'q') {
+      if (isEscape(sequence) || isCharIgnoreCase(sequence, 'q')) {
         closeMcpDetailsModal();
         return true;
       }
-      if (sequence === '\x1b[A') {
+      if (isArrowUp(sequence)) {
         mcpDetailsScrollOffset = Math.max(0, mcpDetailsScrollOffset - 1);
         renderMcpDetailsModal();
         return true;
       }
-      if (sequence === '\x1b[B') {
+      if (isArrowDown(sequence)) {
         mcpDetailsScrollOffset = Math.min(maxOffset, mcpDetailsScrollOffset + 1);
         renderMcpDetailsModal();
         return true;
@@ -654,11 +717,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
 
     if (mcpModalOpen) {
-      if (sequence === '\x1b' || sequence.toLowerCase() === 'q') {
+      if (isEscape(sequence) || isCharIgnoreCase(sequence, 'q')) {
         closeMcpModal();
         return true;
       }
-      if (sequence === '\x1b[A') {
+      if (isArrowUp(sequence)) {
         const states = runtime.getMcpServerStates();
         if (states.length > 0) {
           mcpServerIndex = (mcpServerIndex + states.length - 1) % states.length;
@@ -666,7 +729,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         }
         return true;
       }
-      if (sequence === '\x1b[B') {
+      if (isArrowDown(sequence)) {
         const states = runtime.getMcpServerStates();
         if (states.length > 0) {
           mcpServerIndex = (mcpServerIndex + 1) % states.length;
@@ -674,7 +737,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         }
         return true;
       }
-      if (sequence === '\t') {
+      if (isTab(sequence)) {
         mcpFocus = mcpFocus === 'server' ? 'global' : 'server';
         renderMcpModal();
         return true;
@@ -683,7 +746,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         void runMcpModalToggle();
         return true;
       }
-      if (sequence === '\r' || sequence === '\n') {
+      if (isEnter(sequence)) {
         if (mcpFocus === 'server') {
           openMcpDetailsModal();
         }
@@ -702,22 +765,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return false;
     }
 
-    const lower = sequence.toLowerCase();
-    if (lower === 'y' || lower === 'n' || lower === 'a' || lower === 'x') {
-      void handleExecutionApproval(lower as ApprovalActionKey);
+    const char = getChar(sequence);
+    if (char && (char.toLowerCase() === 'y' || char.toLowerCase() === 'n' || char.toLowerCase() === 'a' || char.toLowerCase() === 'x')) {
+      void handleExecutionApproval(char.toLowerCase() as ApprovalActionKey);
       return true;
     }
-    if (sequence === '\x1b[D') {
+    if (isArrowLeft(sequence)) {
       approvalSelectionIndex = (approvalSelectionIndex + approvalActions.length - 1) % approvalActions.length;
       renderApprovalDialog();
       return true;
     }
-    if (sequence === '\x1b[C') {
+    if (isArrowRight(sequence)) {
       approvalSelectionIndex = (approvalSelectionIndex + 1) % approvalActions.length;
       renderApprovalDialog();
       return true;
     }
-    if (sequence === '\r' || sequence === '\n') {
+    if (isEnter(sequence)) {
       void handleExecutionApproval(approvalActions[approvalSelectionIndex].key);
       return true;
     }
@@ -2073,16 +2136,16 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
     // Handle provider form edit state
     if (providerFormState) {
-      if (sequence === '\x1b') {
+      if (isEscape(sequence)) {
         providerFormState = null;
         renderProviderModal();
         return true;
       }
-      if (sequence === '\t' || sequence === '\x1b[B') {
+      if (isTab(sequence) || isArrowDown(sequence)) {
         moveProviderFormField(1);
         return true;
       }
-      if (sequence === '\x1b[Z' || sequence === '\x1b[A') {
+      if (isShiftTab(sequence) || isArrowUp(sequence)) {
         moveProviderFormField(-1);
         return true;
       }
@@ -2090,11 +2153,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         await saveProviderForm();
         return true;
       }
-      if (sequence === '\x1b[D') {
+      if (isArrowLeft(sequence)) {
         moveProviderFormCursor(-1);
         return true;
       }
-      if (sequence === '\x1b[C' || sequence === ' ') {
+      if (isArrowRight(sequence) || sequence === ' ') {
         if (sequence === ' ') {
           insertProviderFormText(' ');
           renderProviderModal();
@@ -2103,11 +2166,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         }
         return true;
       }
-      if (sequence === '\r' || sequence === '\n') {
+      if (isEnter(sequence)) {
         await saveProviderForm();
         return true;
       }
-      if (sequence === '\x7f') {
+      if (isBackspace(sequence)) {
         deleteProviderFormText();
         renderProviderModal();
         return true;
@@ -2129,27 +2192,27 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
     // Handle add provider name input state
     if (addProviderNameInput) {
-      if (sequence === '\x1b') {
+      if (isEscape(sequence)) {
         addProviderNameInput = null;
         providerModalNotice = null;
         renderProviderModal();
         return true;
       }
-      if (sequence === '\r' || sequence === '\n') {
+      if (isEnter(sequence)) {
         await addCustomProvider(addProviderNameInput.value);
         return true;
       }
-      if (sequence === '\x1b[D') {
+      if (isArrowLeft(sequence)) {
         addProviderNameInput.cursorOffset = Math.max(0, addProviderNameInput.cursorOffset - 1);
         renderProviderModal();
         return true;
       }
-      if (sequence === '\x1b[C') {
+      if (isArrowRight(sequence)) {
         addProviderNameInput.cursorOffset = Math.min(addProviderNameInput.value.length, addProviderNameInput.cursorOffset + 1);
         renderProviderModal();
         return true;
       }
-      if (sequence === '\x7f') {
+      if (isBackspace(sequence)) {
         const input = addProviderNameInput;
         if (input.cursorOffset > 0) {
           input.value = input.value.slice(0, input.cursorOffset - 1) + input.value.slice(input.cursorOffset);
@@ -2185,11 +2248,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
     // Handle delete provider confirmation state
     if (deleteProviderConfirm) {
-      if (sequence.toLowerCase() === 'y') {
+      if (isCharIgnoreCase(sequence, 'y')) {
         await deleteCustomProvider(deleteProviderConfirm.providerId);
         return true;
       }
-      if (sequence === '\x1b' || sequence.toLowerCase() === 'n') {
+      if (isEscape(sequence) || isCharIgnoreCase(sequence, 'n')) {
         deleteProviderConfirm = null;
         renderProviderModal();
         return true;
@@ -2197,11 +2260,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return true;
     }
 
-    if (sequence === '\x1b' || sequence.toLowerCase() === 'q') {
+    if (isEscape(sequence) || isCharIgnoreCase(sequence, 'q')) {
       closeProviderModal();
       return true;
     }
-    if (sequence === '\x1b[A') {
+    if (isArrowUp(sequence)) {
       const providers = getProviderSlots();
       if (providers.length > 0) {
         providerModalProviderIndex = (providerModalProviderIndex + providers.length - 1) % providers.length;
@@ -2210,7 +2273,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       renderProviderModal();
       return true;
     }
-    if (sequence === '\x1b[B') {
+    if (isArrowDown(sequence)) {
       const providers = getProviderSlots();
       if (providers.length > 0) {
         providerModalProviderIndex = (providerModalProviderIndex + 1) % providers.length;
@@ -2219,22 +2282,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       renderProviderModal();
       return true;
     }
-    if (sequence.toLowerCase() === 'm') {
+    if (isCharIgnoreCase(sequence, 'm')) {
       openModelModal(getSelectedProviderSlot()?.id);
       return true;
     }
-    if (sequence === '\r' || sequence === '\n') {
+    if (isEnter(sequence)) {
       const selectedProvider = getSelectedProviderSlot();
       if (selectedProvider) {
         startProviderForm(selectedProvider.id);
       }
       return true;
     }
-    if (sequence === '+' || sequence.toLowerCase() === 'a') {
+    if (isChar(sequence, '+') || isCharIgnoreCase(sequence, 'a')) {
       startAddProvider();
       return true;
     }
-    if (sequence.toLowerCase() === 'd') {
+    if (isCharIgnoreCase(sequence, 'd')) {
       const selectedProvider = getSelectedProviderSlot();
       if (selectedProvider && isCustomProviderId(selectedProvider.id)) {
         showDeleteProviderConfirmation(selectedProvider.id);
@@ -2250,7 +2313,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return false;
     }
 
-    if (sequence === '\t') {
+    if (isTab(sequence)) {
       modelModalFocus = modelModalFocus === 'providers'
         ? 'filter'
         : modelModalFocus === 'filter'
@@ -2260,22 +2323,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return true;
     }
     if (modelModalFocus === 'filter') {
-      if (sequence === '\x1b[D') {
+      if (isArrowLeft(sequence)) {
         moveModelFilterCursor(-1);
         renderModelModal();
         return true;
       }
-      if (sequence === '\x1b[C') {
+      if (isArrowRight(sequence)) {
         moveModelFilterCursor(1);
         renderModelModal();
         return true;
       }
-      if (sequence === '\x7f') {
+      if (isBackspace(sequence)) {
         deleteModelFilterText();
         renderModelModal();
         return true;
       }
-      if (sequence === '\r' || sequence === '\n') {
+      if (isEnter(sequence)) {
         modelModalFocus = 'models';
         renderModelModal();
         return true;
@@ -2295,11 +2358,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       }
       return true;
     }
-    if (sequence === '\x1b' || sequence.toLowerCase() === 'q') {
+    if (isEscape(sequence) || isCharIgnoreCase(sequence, 'q')) {
       closeModelModal();
       return true;
     }
-    if (sequence === '\x1b[A') {
+    if (isArrowUp(sequence)) {
       if (modelModalFocus === 'providers') {
         const providers = getProviderSlots();
         if (providers.length > 0) {
@@ -2321,7 +2384,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       renderModelModal();
       return true;
     }
-    if (sequence === '\x1b[B') {
+    if (isArrowDown(sequence)) {
       if (modelModalFocus === 'providers') {
         const providers = getProviderSlots();
         if (providers.length > 0) {
@@ -2343,11 +2406,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       renderModelModal();
       return true;
     }
-    if (sequence.toLowerCase() === 'd') {
+    if (isCharIgnoreCase(sequence, 'd')) {
       await deleteSelectedCustomModel();
       return true;
     }
-    if (sequence === '\r' || sequence === '\n') {
+    if (isEnter(sequence)) {
       await applyModelSelection();
       return true;
     }
