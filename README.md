@@ -24,13 +24,6 @@ askai what is the capital of France
 askai
 ```
 
-Interactive commands:
-
-```text
-/provider                  # Open the provider modal
-/model                     # Open the model modal
-```
-
 ### Multiline Input
 
 Use `Shift+Enter` to insert a new line in the prompt editor.
@@ -80,15 +73,6 @@ askai --mcp on what is 2+2
 # Use custom config
 askai -c ./my-settings.json hello
 ```
-
-## Providers And Models
-
-Interactive mode has two separate modals:
-
-- `/provider` shows the fixed provider slots: `OpenAI`, `Anthropic`, `OpenRouter`, and five custom providers
-- `/model` shows models grouped by provider so you can switch the active provider/model pair directly
-
-Preset providers refresh their model list remotely after you save them in the provider modal. Custom providers are manual OpenAI-compatible endpoints; when you change a custom provider's model name, the old name is remembered in that provider's model list.
 
 ## Shell Command Execution
 
