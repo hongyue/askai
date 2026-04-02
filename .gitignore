@@ -19,6 +19,8 @@ askai
 *.swo
 *~
 .qwen/
+.opencode/
+.continue/
 
 # OS
 .DS_Store

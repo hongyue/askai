@@ -746,7 +746,19 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     },
     () => {
       sessionsList = listSessions();
-      sessionsSelectedIndex = 0;
+      if (!sessionsList.some(s => s.id === currentSession.id)) {
+        sessionsList.unshift({
+          id: currentSession.id,
+          title: currentSession.title,
+          provider: currentSession.provider,
+          model: currentSession.model,
+          created_at: Date.now(),
+          updated_at: Date.now(),
+          message_count: messages.filter(m => m.role !== 'system').length,
+        });
+      }
+      const currentSessionIndex = sessionsList.findIndex(s => s.id === currentSession.id);
+      sessionsSelectedIndex = currentSessionIndex >= 0 ? currentSessionIndex : 0;
       sessionsModalOpen = true;
       renderSessionsModal();
     },
@@ -1862,6 +1874,17 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
 
     sessionsList = listSessions();
+    if (!sessionsList.some(s => s.id === currentSession.id)) {
+      sessionsList.unshift({
+        id: currentSession.id,
+        title: currentSession.title,
+        provider: currentSession.provider,
+        model: currentSession.model,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+        message_count: messages.filter(m => m.role !== 'system').length,
+      });
+    }
 
     if (sessionsRenaming) {
       const val = sessionsRenaming.value;
