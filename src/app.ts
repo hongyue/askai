@@ -62,6 +62,7 @@ interface MutableInputNode {
   plainText: string;
   cursorOffset?: number;
   setText(text: string): void;
+  insertText(text: string): void;
   focus(): void;
   blur?: () => void;
   onContentChange?: (() => void) | undefined;
@@ -686,9 +687,12 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
     screenMode: 'alternate-screen',
-    useKittyKeyboard: {
+    // Disable Kitty keyboard protocol in iTerm2 due to IME input issues
+    // iTerm2 has known problems with Kitty protocol and IME (Chinese/Japanese/Korean input)
+    useKittyKeyboard: process.env.TERM_PROGRAM === 'iTerm.app' ? null : {
       disambiguate: true,
       allKeysAsEscapes: true,
+      reportText: true,  // Required for IME (Chinese/Japanese/Korean) input
     },
   });
   process.stdout.write(enableModifyOtherKeys);
@@ -1115,7 +1119,6 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     keyBindings: [
       { name: 'return', action: 'submit' },
       { name: 'return', shift: true, action: 'newline' },
-      { name: 'j', shift: true, action: "newline" },
     ],
   });
   inputRow.add(input);
@@ -2486,6 +2489,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return true;
     }
 
+    // Handle IME text input directly by inserting into TextareaRenderable
+    // IME input comes as multi-byte UTF-8 sequences without escape codes
+    if (sequence.length > 0 && !sequence.includes('\x1b') && inputNode) {
+      const hasNonAscii = [...sequence].some(c => c.charCodeAt(0) > 127);
+      if (hasNonAscii) {
+        // This is IME/composed text - use insertText for proper cursor handling
+        inputNode.insertText(sequence);
+        inputBuffer = inputNode.plainText;
+        return true;
+      }
+      // For ASCII text in non-Kitty mode (iTerm2), let it pass through to TextareaRenderable
+      if (process.env.TERM_PROGRAM === 'iTerm.app') {
+        return false;
+      }
+    }
+
     return false;
   });
 
@@ -3198,9 +3217,15 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return;
     }
 
-    if (key.sequence && key.sequence.length === 1) {
-      const charCode = key.sequence.charCodeAt(0);
-      if (charCode >= 32) {
+    // Handle text input - including multi-character IME input (Chinese/Japanese/Korean)
+    if (key.sequence && key.sequence.length > 0) {
+      // Check if this is printable text (not a control sequence)
+      const isPrintable = key.sequence.split('').every(c => {
+        const code = c.charCodeAt(0);
+        return code >= 32 || code > 127; // Allow ASCII printable and non-ASCII (IME) chars
+      });
+      
+      if (isPrintable) {
         const nextValue = inputBuffer + key.sequence;
         const startsCommandMode = inputBuffer === '' && key.sequence === '/';
         const continuesCommandMode = inputBuffer.startsWith('/');
@@ -3241,6 +3266,33 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   
   // Handle global keyboard
   renderer.keyInput.on('keypress', async (key: KeyEvent) => {
+    // Handle IME/composed text input (Chinese/Japanese/Korean)
+    // IME text comes as non-ASCII or multi-character sequences without escape codes
+    if (key.sequence && key.sequence.length > 0 && !key.sequence.includes('\x1b')) {
+      const hasNonAscii = [...key.sequence].some(c => c.charCodeAt(0) > 127);
+      const isMultiCharText = key.sequence.length > 1;
+      
+      if (hasNonAscii || isMultiCharText) {
+        // This is likely IME/composed text input
+        if (providerModalOpen && providerFormState) {
+          insertProviderFormText(key.sequence);
+          renderProviderModal();
+          return;
+        }
+        if (modelModalOpen && modelModalFocus === 'filter') {
+          insertModelFilterText(key.sequence);
+          renderModelModal();
+          return;
+        }
+        if (inputNode && !mcpModalOpen && !pendingExecution) {
+          // Use insertText for proper cursor handling
+          inputNode.insertText(key.sequence);
+          inputBuffer = inputNode.plainText;
+        }
+        return;
+      }
+    }
+    
     if (key.ctrl && key.name === 'c') {
       if (await handleInterruptSignal()) {
         return;
@@ -3328,6 +3380,18 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   });
 
   renderer.keyInput.on('paste', (event) => {
+    // Handle IME/composed text input for main text area
+    if (!providerModalOpen && !modelModalOpen && !mcpModalOpen && !pendingExecution) {
+      event.preventDefault();
+      const text = new TextDecoder().decode(event.bytes);
+      if (text && inputNode) {
+        // Use insertText for proper cursor handling
+        inputNode.insertText(text);
+        inputBuffer = inputNode.plainText;
+      }
+      return;
+    }
+    
     if (providerModalOpen && providerFormState) {
       event.preventDefault();
       const text = new TextDecoder().decode(event.bytes);

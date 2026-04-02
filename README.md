@@ -33,8 +33,7 @@ Interactive commands:
 
 ### Multiline Input
 
-Use `Shift+Enter` to insert a new line in the prompt editor. If it doesn't work use 
-`Shift+J` as a fallback.
+Use `Shift+Enter` to insert a new line in the prompt editor.
 
 If you use `tmux`, add the following settings to $HOME/.tmux.conf to make `Shift+Enter` work:
 
