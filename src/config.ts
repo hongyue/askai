@@ -491,7 +491,7 @@ function inferKindFromProviderId(providerId: string, baseUrl?: string): Provider
   return 'custom';
 }
 
-function normalizeModels(models?: string[], currentModel?: string): string[] {
+export function normalizeModels(models?: string[], currentModel?: string): string[] {
   const deduped = new Set<string>();
 
   if (currentModel && currentModel.trim()) {

@@ -21,6 +21,7 @@ import {
   setActiveProvider,
   setProviderModel,
   upsertProvider,
+  normalizeModels,
   type ProviderConfig,
   type ProviderType,
   type ResolvedProviderConfig,
@@ -702,6 +703,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   let modelModalProviderScrollOffset = 0;
   let modelModalModelScrollOffset = 0;
   let modelModalFilter: FilterState = { value: '', cursorOffset: 0 };
+  let addModelInput: { value: string; cursorOffset: number } | null = null;
   let providerFormState: ProviderFormState | null = null;
   let providerModalNotice: string | null = null;
   let modelModalNotice: string | null = null;
@@ -1837,6 +1839,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
   function closeModelModal(): void {
     modelModalOpen = false;
+    addModelInput = null;
     modelModalNode.visible = false;
     modelModalTitleTextNode.content = stringToStyledText('');
     modelModalProvidersTextNode.content = stringToStyledText('');
@@ -2023,6 +2026,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     modelModalFocus = 'models';
     modelModalNotice = null;
     modelModalFilter = { value: '', cursorOffset: 0 };
+    addModelInput = null;
     providerModalNode.visible = false;
     syncModelModalSelection(providerId || resolvedProvider.id, providerId === resolvedProvider.id ? resolvedProvider.model : undefined);
     renderModelModal();
@@ -2239,21 +2243,54 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     const filterValueChunks = formatFilterValue(modelModalFilter.value, modelModalFilter.cursorOffset, modelModalFocus === 'filter');
     filterContent.push(...filterValueChunks);
 
-    const modelContent = [
-      `Models${selectedProvider ? ` (${selectedProvider.displayName})` : ''}`,
-      ...(modelModalModelScrollOffset > 0 ? ['  ^ more'] : []),
-      ...(modelLines.length > 0 ? modelLines : ['  No models available']),
-      ...(modelModalModelScrollOffset + providerModalVisibleModels < models.length ? ['  v more'] : []),
-    ];
+    let modelContent: (string | any[])[];
 
-    if (modelModalNotice) {
-      modelContent.push('', `Notice: ${modelModalNotice}`);
+    if (addModelInput) {
+      const val = addModelInput.value;
+      const cursor = Math.max(0, Math.min(addModelInput.cursorOffset, val.length));
+      let cursorChunks: any[];
+      if (cursor < val.length) {
+        const char = val[cursor];
+        cursorChunks = [
+          white(val.slice(0, cursor)),
+          bgWhite(black(char)),
+          white(val.slice(cursor + 1)),
+        ];
+      } else {
+        cursorChunks = [white(val), bgWhite(black(' '))];
+      }
+      modelContent = [
+        `Models${selectedProvider ? ` (${selectedProvider.displayName})` : ''}`,
+        '',
+        white('Add model: '),
+        ...cursorChunks,
+      ];
+      if (modelModalNotice) {
+        modelContent.push('', `Notice: ${modelModalNotice}`);
+      }
+      modelContent.push('', 'Enter confirm   Esc cancel   ←/→ move cursor');
+    } else {
+      modelContent = [
+        `Models${selectedProvider ? ` (${selectedProvider.displayName})` : ''}`,
+        ...(modelModalModelScrollOffset > 0 ? ['  ^ more'] : []),
+        ...(modelLines.length > 0 ? modelLines : ['  No models available']),
+        ...(modelModalModelScrollOffset + providerModalVisibleModels < models.length ? ['  v more'] : []),
+      ];
+
+      if (modelModalNotice) {
+        modelContent.push('', `Notice: ${modelModalNotice}`);
+      }
+
+      const canDelete = selectedProvider ? models.length > 1 : false;
+      const helpParts = [];
+      helpParts.push('Tab switch list');
+      helpParts.push('↑/↓ move');
+      helpParts.push('Enter use model');
+      if (canDelete) helpParts.push('d delete model');
+      helpParts.push('+/a add model');
+      helpParts.push('Esc/q close');
+      modelContent.push('', helpParts.join('   '));
     }
-
-    const canDelete = selectedProvider ? models.length > 1 : false;
-    modelContent.push('', canDelete
-      ? 'Tab switch list   ↑/↓ move   Enter use model   d delete model   Esc/q close'
-      : 'Tab switch list   ↑/↓ move   Enter use model   Esc/q close');
 
     modelModalTitleTextNode.content = stringToStyledText(titleContent.join('\n'));
     modelModalProvidersTextNode.content = stringToStyledText(providerContent.join('\n'));
@@ -2360,6 +2397,86 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     syncModelModalSelection(selectedProvider.id, selectedModel);
     await refreshActiveProviderView();
     closeModelModal();
+  }
+
+  function startAddModelInput(): void {
+    const selectedProvider = getSelectedModelModalProvider();
+    if (!selectedProvider) return;
+    addModelInput = { value: '', cursorOffset: 0 };
+    modelModalNotice = null;
+    renderModelModal();
+  }
+
+  function cancelAddModelInput(): void {
+    addModelInput = null;
+    renderModelModal();
+  }
+
+  function moveAddModelCursor(delta: number): void {
+    if (!addModelInput) return;
+    addModelInput.cursorOffset = Math.max(0, Math.min(addModelInput.cursorOffset + delta, addModelInput.value.length));
+  }
+
+  function deleteAddModelChar(): void {
+    if (!addModelInput) return;
+    const { value, cursorOffset } = addModelInput;
+    if (cursorOffset > 0) {
+      addModelInput.value = value.slice(0, cursorOffset - 1) + value.slice(cursorOffset);
+      addModelInput.cursorOffset--;
+    }
+  }
+
+  function insertAddModelChar(char: string): void {
+    if (!addModelInput) return;
+    const { value, cursorOffset } = addModelInput;
+    addModelInput.value = value.slice(0, cursorOffset) + char + value.slice(cursorOffset);
+    addModelInput.cursorOffset++;
+  }
+
+  function insertAddModelPaste(text: string): void {
+    if (!addModelInput) return;
+    const normalized = text.replace(/\r\n/g, '\n').replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '').replace(/\n/g, ' ');
+    if (!normalized) return;
+    const { value, cursorOffset } = addModelInput;
+    addModelInput.value = value.slice(0, cursorOffset) + normalized + value.slice(cursorOffset);
+    addModelInput.cursorOffset += normalized.length;
+  }
+
+  async function confirmAddModelInput(): Promise<void> {
+    if (!addModelInput) return;
+    const modelName = addModelInput.value.trim();
+    if (!modelName) {
+      modelModalNotice = 'Model name cannot be empty';
+      addModelInput = null;
+      renderModelModal();
+      return;
+    }
+
+    const selectedProvider = getSelectedModelModalProvider();
+    if (!selectedProvider) return;
+
+    const provider = config.providers[selectedProvider.id];
+    const existingModels = (provider.models && provider.models.length > 0 ? provider.models : [provider.model]).filter(Boolean);
+    if (existingModels.map(m => m.trim()).includes(modelName)) {
+      modelModalNotice = `Model "${modelName}" already exists for this provider`;
+      addModelInput = null;
+      renderModelModal();
+      return;
+    }
+
+    const newModelList = [...existingModels, modelName];
+    provider.models = normalizeModels(newModelList, provider.model);
+
+    if (resolvedProvider.id === selectedProvider.id) {
+      await runtime.switchModel(modelName, false);
+    }
+    await runtime.persistConfig();
+
+    addModelInput = null;
+    modelModalNotice = `Added model ${modelName} to ${selectedProvider.displayName}`;
+    syncModelModalSelection(selectedProvider.id);
+    await refreshActiveProviderView();
+    renderModelModal();
   }
 
   async function deleteSelectedCustomModel(): Promise<void> {
@@ -2758,6 +2875,46 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return false;
     }
 
+    if (addModelInput) {
+      if (isEscape(sequence)) {
+        cancelAddModelInput();
+        return true;
+      }
+      if (isEnter(sequence)) {
+        await confirmAddModelInput();
+        return true;
+      }
+      if (isArrowLeft(sequence)) {
+        moveAddModelCursor(-1);
+        renderModelModal();
+        return true;
+      }
+      if (isArrowRight(sequence)) {
+        moveAddModelCursor(1);
+        renderModelModal();
+        return true;
+      }
+      if (isBackspace(sequence)) {
+        deleteAddModelChar();
+        renderModelModal();
+        return true;
+      }
+      {
+        const char = getChar(sequence);
+        if (char !== null && char.charCodeAt(0) >= 32) {
+          insertAddModelChar(char);
+          renderModelModal();
+          return true;
+        }
+      }
+      if (sequence.length > 1 && !sequence.includes('\x1b')) {
+        insertAddModelPaste(sequence);
+        renderModelModal();
+        return true;
+      }
+      return true;
+    }
+
     if (isTab(sequence)) {
       modelModalFocus = modelModalFocus === 'providers'
         ? 'filter'
@@ -2849,6 +3006,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         }
       }
       renderModelModal();
+      return true;
+    }
+    if (isChar(sequence, '+') || isCharIgnoreCase(sequence, 'a')) {
+      startAddModelInput();
       return true;
     }
     if (isCharIgnoreCase(sequence, 'd')) {
