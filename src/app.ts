@@ -41,6 +41,19 @@ import {
   type CommandBlock,
   type ExecutionDecision,
 } from './shell';
+import {
+  createSession,
+  addMessage,
+  getMessages,
+  getSession,
+  autoGenerateTitle,
+  listSessions,
+  renameSession,
+  deleteSession,
+  deleteEmptySessions,
+  type SessionStorage,
+  type SessionSummary,
+} from './session';
 
 interface MutableTextNode {
   content: ReturnType<typeof stringToStyledText>;
@@ -151,6 +164,7 @@ const oneShotFeedbackColor = '\x1b[38;5;45m';
 const ansiReset = '\x1b[0m';
 const mcpDetailsModalHeight = 20;
 const mcpDetailsVisibleLineCount = 15;
+const sessionsVisibleLineCount = 15;
 const statusSpinnerFrames = ['|', '/', '-', '\\'] as const;
 const enableModifyOtherKeys = '\x1b[>4;2m';
 const resetModifyOtherKeys = '\x1b[>4m';
@@ -304,6 +318,9 @@ async function initializeRuntime(options: RunAppOptions): Promise<{
   persistConfig: () => Promise<void>;
   getMcpServerStates: () => MCPServerState[];
   messages: Message[];
+  session: SessionStorage;
+  startNewSession: () => SessionStorage;
+  loadPersistedSession: (id: string) => void;
 }> {
   const configPath = resolveConfigPath(options.configPath);
   const config = await loadConfig(configPath);
@@ -381,6 +398,23 @@ async function initializeRuntime(options: RunAppOptions): Promise<{
 
   const messages: Message[] = [{ role: 'system', content: systemPrompt }];
 
+  let session: SessionStorage = { id: '', title: 'New Session', provider: resolvedProvider.id, model: resolvedProvider.model };
+
+  const startNewSession = (): SessionStorage => {
+    messages.length = 0;
+    messages.push({ role: 'system', content: systemPrompt });
+    return { id: '', title: 'New Session', provider: resolvedProvider.id, model: resolvedProvider.model };
+  };
+
+  const loadPersistedSession = (id: string): void => {
+    const stored = getSession(id);
+    if (!stored) throw new Error(`Session "${id}" not found`);
+    const loaded = getMessages(id);
+    messages.length = 0;
+    messages.push(...loaded);
+    session = stored;
+  };
+
   return {
     config,
     configPath,
@@ -396,6 +430,9 @@ async function initializeRuntime(options: RunAppOptions): Promise<{
     persistConfig,
     getMcpServerStates: () => mcpManager ? mcpManager.listServerStates() : [],
     messages,
+    session,
+    startNewSession,
+    loadPersistedSession,
   };
 }
 
@@ -591,7 +628,13 @@ export async function runOneShotApp(options: RunAppOptions & { question: string 
   const provider = runtime.getProvider();
   let providerTools = runtime.getProviderTools();
 
+  // One-shot always has a question - create session immediately
+  const title = autoGenerateTitle(options.question);
+  const session = createSession(title, runtime.getResolvedProvider().id, runtime.getResolvedProvider().model);
+  addMessage(session.id, 'system', runtime.systemPrompt);
+
   messages.push({ role: 'user', content: options.question });
+  addMessage(session.id, 'user', options.question);
 
   try {
     while (true) {
@@ -603,6 +646,7 @@ export async function runOneShotApp(options: RunAppOptions & { question: string 
       }
 
       messages.push(response);
+      addMessage(session.id, 'assistant', response.content, response.tool_calls);
 
       if (response.tool_calls && response.tool_calls.length > 0 && mcpManager) {
         for (const toolCall of response.tool_calls) {
@@ -614,6 +658,7 @@ export async function runOneShotApp(options: RunAppOptions & { question: string 
             content: content || (result.isError ? 'Tool returned an error.' : 'Tool completed successfully.'),
             tool_call_id: toolCall.id,
           });
+          addMessage(session.id, 'tool', content || (result.isError ? 'Tool returned an error.' : 'Tool completed successfully.'), undefined, toolCall.id);
         }
         continue;
       }
@@ -632,10 +677,16 @@ export async function runOneShotApp(options: RunAppOptions & { question: string 
 
 export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const runtime = await initializeRuntime(options);
-  const { mcpManager, state, messages, config } = runtime;
+  const { mcpManager, state, messages, config, systemPrompt } = runtime;
   let provider = runtime.getProvider();
   let resolvedProvider = runtime.getResolvedProvider();
   let providerTools = runtime.getProviderTools();
+  let currentSession = runtime.session;
+  let sessionsModalOpen = false;
+  let sessionsList: SessionSummary[] = [];
+  let sessionsSelectedIndex = 0;
+  let sessionsScrollOffset = 0;
+  let sessionsRenaming: { id: string; value: string; cursorOffset: number } | null = null;
   let mcpModalOpen = false;
   let mcpDetailsOpen = false;
   let mcpServerIndex = 0;
@@ -682,6 +733,23 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     },
     async (args) => handleProviderCommand(args),
     async (args) => handleModelCommand(args),
+    async () => {
+      currentSession = runtime.startNewSession();
+      while (chatNodeIds.length > 0) {
+        const nodeId = chatNodeIds.pop();
+        if (nodeId) chatNode.remove(nodeId);
+      }
+      renderHeader();
+      renderStatusBar();
+      root.requestRender();
+      return 'Started new session';
+    },
+    () => {
+      sessionsList = listSessions();
+      sessionsSelectedIndex = 0;
+      sessionsModalOpen = true;
+      renderSessionsModal();
+    },
   );
   
   const renderer = await createCliRenderer({
@@ -778,6 +846,168 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       if (isEnter(sequence)) {
         if (mcpFocus === 'server') {
           openMcpDetailsModal();
+        }
+        return true;
+      }
+      if (sequence.length > 0) {
+        return true;
+      }
+    }
+
+    if (sessionsModalOpen) {
+      if (sessionsRenaming) {
+        if (isEscape(sequence)) {
+          sessionsRenaming = null;
+          renderSessionsModal();
+          return true;
+        }
+        if (isEnter(sequence)) {
+          const newTitle = sessionsRenaming.value.trim();
+          if (newTitle) {
+            renameSession(sessionsRenaming.id, newTitle);
+            if (sessionsRenaming.id === currentSession.id) {
+              currentSession = { ...currentSession, title: newTitle };
+              renderHeader();
+            }
+          }
+          sessionsRenaming = null;
+          renderSessionsModal();
+          return true;
+        }
+        if (isArrowLeft(sequence)) {
+          sessionsRenaming.cursorOffset = Math.max(0, sessionsRenaming.cursorOffset - 1);
+          renderSessionsModal();
+          return true;
+        }
+        if (isArrowRight(sequence)) {
+          sessionsRenaming.cursorOffset = Math.min(sessionsRenaming.value.length, sessionsRenaming.cursorOffset + 1);
+          renderSessionsModal();
+          return true;
+        }
+        if (isBackspace(sequence)) {
+          if (sessionsRenaming.cursorOffset > 0) {
+            sessionsRenaming.value = sessionsRenaming.value.slice(0, sessionsRenaming.cursorOffset - 1) + sessionsRenaming.value.slice(sessionsRenaming.cursorOffset);
+            sessionsRenaming.cursorOffset--;
+            renderSessionsModal();
+          }
+          return true;
+        }
+        {
+          const char = getChar(sequence);
+          if (char !== null && char.charCodeAt(0) >= 32) {
+            sessionsRenaming.value = sessionsRenaming.value.slice(0, sessionsRenaming.cursorOffset) + char + sessionsRenaming.value.slice(sessionsRenaming.cursorOffset);
+            sessionsRenaming.cursorOffset++;
+            renderSessionsModal();
+            return true;
+          }
+        }
+        if (sequence.length > 1 && !sequence.includes('\x1b')) {
+          const normalizedText = sequence.replace(/\r\n/g, '\n').replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '').replace(/\n/g, ' ');
+          if (normalizedText) {
+            sessionsRenaming.value = sessionsRenaming.value.slice(0, sessionsRenaming.cursorOffset) + normalizedText + sessionsRenaming.value.slice(sessionsRenaming.cursorOffset);
+            sessionsRenaming.cursorOffset += normalizedText.length;
+            renderSessionsModal();
+          }
+          return true;
+        }
+        return true;
+      }
+
+      if (isEscape(sequence) || isCharIgnoreCase(sequence, 'q')) {
+        closeSessionsModal();
+        return true;
+      }
+      if (isArrowUp(sequence)) {
+        if (sessionsList.length > 0) {
+          sessionsSelectedIndex = Math.max(0, sessionsSelectedIndex - 1);
+          renderSessionsModal();
+        }
+        return true;
+      }
+      if (isArrowDown(sequence)) {
+        if (sessionsList.length > 0) {
+          sessionsSelectedIndex = Math.min(sessionsList.length - 1, sessionsSelectedIndex + 1);
+          renderSessionsModal();
+        }
+        return true;
+      }
+      if (sequence === '\x1b[5~') {
+        if (sessionsList.length > 0) {
+          sessionsSelectedIndex = Math.max(0, sessionsSelectedIndex - sessionsVisibleLineCount);
+          renderSessionsModal();
+        }
+        return true;
+      }
+      if (sequence === '\x1b[6~') {
+        if (sessionsList.length > 0) {
+          sessionsSelectedIndex = Math.min(sessionsList.length - 1, sessionsSelectedIndex + sessionsVisibleLineCount);
+          renderSessionsModal();
+        }
+        return true;
+      }
+      if (isEnter(sequence)) {
+        if (sessionsList.length > 0) {
+          const selected = sessionsList[sessionsSelectedIndex];
+          if (selected) {
+            runtime.loadPersistedSession(selected.id);
+            currentSession = getSession(selected.id)!;
+            while (chatNodeIds.length > 0) {
+              const nodeId = chatNodeIds.pop();
+              if (nodeId) chatNode.remove(nodeId);
+            }
+            for (const msg of messages) {
+              if (msg.role === 'system') continue;
+              if (msg.role === 'user') addMsg(`> ${msg.content}`, '#00ff88');
+              else if (msg.role === 'assistant' && msg.content) addMsg(msg.content);
+              else if (msg.role === 'tool') addMsg(`[tool] ${msg.content}`, '#888888');
+            }
+            closeSessionsModal();
+            renderHeader();
+            root.requestRender();
+          }
+        }
+        return true;
+      }
+      if (isCharIgnoreCase(sequence, 'n')) {
+        currentSession = runtime.startNewSession();
+        while (chatNodeIds.length > 0) {
+          const nodeId = chatNodeIds.pop();
+          if (nodeId) chatNode.remove(nodeId);
+        }
+        closeSessionsModal();
+        renderHeader();
+        renderStatusBar();
+        root.requestRender();
+        return true;
+      }
+      if (isCharIgnoreCase(sequence, 'r')) {
+        if (sessionsList.length > 0) {
+          const selected = sessionsList[sessionsSelectedIndex];
+          if (selected) {
+            sessionsRenaming = { id: selected.id, value: selected.title, cursorOffset: selected.title.length };
+            renderSessionsModal();
+          }
+        }
+        return true;
+      }
+      if (isCharIgnoreCase(sequence, 'd')) {
+        if (sessionsList.length > 0) {
+          const selected = sessionsList[sessionsSelectedIndex];
+          if (selected) {
+            const wasActive = selected.id === currentSession.id;
+            deleteSession(selected.id);
+            if (wasActive) {
+              currentSession = runtime.startNewSession();
+              while (chatNodeIds.length > 0) {
+                const nodeId = chatNodeIds.pop();
+                if (nodeId) chatNode.remove(nodeId);
+              }
+              renderHeader();
+            }
+            sessionsList = listSessions();
+            sessionsSelectedIndex = Math.min(sessionsSelectedIndex, Math.max(0, sessionsList.length - 1));
+            renderSessionsModal();
+          }
         }
         return true;
       }
@@ -1087,6 +1317,25 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   modelModalContentRow.add(modelModalRightColumn);
   modelModal.add(modelModalContentRow);
   
+  const sessionsModal = Box({
+    id: 'sessions-modal',
+    position: 'absolute',
+    width: '78%',
+    left: '11%',
+    top: '12%',
+    height: 'auto',
+    flexDirection: 'column',
+    visible: false,
+    backgroundColor: '#141414',
+    padding: 1,
+  });
+  const sessionsModalText = Text({
+    id: 'sessions-modal-text',
+    content: stringToStyledText(''),
+    fg: '#d8d8d8',
+  });
+  sessionsModal.add(sessionsModalText);
+
   const inputRow = Box({
     id: 'input-row',
     width: '100%',
@@ -1150,6 +1399,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   root.add(mcpDetailsModal);
   root.add(providerModal);
   root.add(modelModal);
+  root.add(sessionsModal);
   renderer.root.add(root);
 
   const liveCmdListBox = renderer.root.findDescendantById('cmd-list-box') as MutableBoxNode | undefined;
@@ -1171,8 +1421,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const liveModelModalProvidersText = renderer.root.findDescendantById('model-modal-providers-text') as MutableTextNode | undefined;
   const liveModelModalFilterText = renderer.root.findDescendantById('model-modal-filter-text') as MutableTextNode | undefined;
   const liveModelModalModelsText = renderer.root.findDescendantById('model-modal-models-text') as MutableTextNode | undefined;
+  const liveSessionsModal = renderer.root.findDescendantById('sessions-modal') as MutableBoxNode | undefined;
+  const liveSessionsModalText = renderer.root.findDescendantById('sessions-modal-text') as MutableTextNode | undefined;
 
-  if (!liveCmdListBox || !liveCmdListText || !liveStatusBarText || !liveHeaderText || !liveInput || !liveChat || !liveApprovalDialog || !liveApprovalDialogText || !liveMcpModal || !liveMcpModalText || !liveMcpDetailsModal || !liveMcpDetailsModalText || !liveProviderModal || !liveProviderModalText || !liveModelModal || !liveModelModalTitleText || !liveModelModalProvidersText || !liveModelModalFilterText || !liveModelModalModelsText) {
+  if (!liveCmdListBox || !liveCmdListText || !liveStatusBarText || !liveHeaderText || !liveInput || !liveChat || !liveApprovalDialog || !liveApprovalDialogText || !liveMcpModal || !liveMcpModalText || !liveMcpDetailsModal || !liveMcpDetailsModalText || !liveProviderModal || !liveProviderModalText || !liveModelModal || !liveModelModalTitleText || !liveModelModalProvidersText || !liveModelModalFilterText || !liveModelModalModelsText || !liveSessionsModal || !liveSessionsModalText) {
     throw new Error('Failed to initialize TUI render tree');
   }
 
@@ -1195,6 +1447,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const modelModalProvidersTextNode = liveModelModalProvidersText;
   const modelModalFilterTextNode = liveModelModalFilterText;
   const modelModalModelsTextNode = liveModelModalModelsText;
+  const sessionsModalNode = liveSessionsModal;
+  const sessionsModalTextNode = liveSessionsModalText;
 
   providerModalNode.onMouseDown = (event) => {
     if (providerModalOpen && providerFormState) {
@@ -1259,7 +1513,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   };
 
   function updateFooterLayout() {
-    const paletteHeight = palette.open ? Math.min(palette.matches.length, 5) : 0;
+    const paletteHeight = palette.open ? Math.min(palette.matches.length, 8) : 0;
     cmdListBoxNode.height = paletteHeight;
     root.requestRender();
   }
@@ -1292,7 +1546,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   }
 
   function renderHeader(): void {
-    headerTextNode.content = stringToStyledText(` Welcome to askai! (${provider.label} / ${provider.model})`);
+    headerTextNode.content = stringToStyledText(` ${currentSession.title} (${provider.label} / ${provider.model})`);
     root.requestRender();
   }
 
@@ -1562,6 +1816,108 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     modelModalModelsTextNode.content = stringToStyledText('');
     root.requestRender();
     inputNode.focus();
+  }
+
+  function closeSessionsModal(): void {
+    sessionsModalOpen = false;
+    sessionsRenaming = null;
+    sessionsScrollOffset = 0;
+    sessionsModalNode.visible = false;
+    sessionsModalTextNode.content = stringToStyledText('');
+    root.requestRender();
+    inputNode.focus();
+  }
+
+  function formatRelativeTime(timestamp: number): string {
+    const diff = Date.now() - timestamp;
+    const minutes = Math.floor(diff / 60000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  }
+
+  function renderSessionsModal(): void {
+    if (!sessionsModalOpen) {
+      closeSessionsModal();
+      return;
+    }
+
+    sessionsList = listSessions();
+
+    if (sessionsRenaming) {
+      const val = sessionsRenaming.value;
+      const cursor = Math.max(0, Math.min(sessionsRenaming.cursorOffset, val.length));
+      let cursorChunks: any[];
+      if (cursor < val.length) {
+        const char = val[cursor];
+        cursorChunks = [
+          white(val.slice(0, cursor)),
+          bgWhite(black(char)),
+          white(val.slice(cursor + 1)),
+        ];
+      } else {
+        cursorChunks = [white(val), bgWhite(black(' '))];
+      }
+      const header = stringToStyledText('Sessions\n\nRename session: ');
+      const footer = stringToStyledText('\n\nEnter confirm   Esc cancel   ←/→ move cursor');
+      sessionsModalTextNode.content = new StyledText([
+        ...header.chunks,
+        ...cursorChunks,
+        ...footer.chunks,
+      ]);
+      sessionsModalNode.visible = true;
+      if (inputNode.blur) inputNode.blur();
+      root.requestRender();
+      return;
+    }
+
+    if (sessionsList.length === 0) {
+      sessionsModalTextNode.content = stringToStyledText(
+        'Sessions\n\nNo sessions yet.\n\nn new session   Esc/q close'
+      );
+      sessionsModalNode.visible = true;
+      if (inputNode.blur) inputNode.blur();
+      root.requestRender();
+      return;
+    }
+
+    sessionsSelectedIndex = Math.max(0, Math.min(sessionsSelectedIndex, sessionsList.length - 1));
+    const totalSessions = sessionsList.length;
+    const maxOffset = Math.max(0, totalSessions - sessionsVisibleLineCount);
+    sessionsScrollOffset = Math.max(0, Math.min(sessionsScrollOffset, maxOffset));
+    if (sessionsSelectedIndex < sessionsScrollOffset) {
+      sessionsScrollOffset = sessionsSelectedIndex;
+    } else if (sessionsSelectedIndex >= sessionsScrollOffset + sessionsVisibleLineCount) {
+      sessionsScrollOffset = sessionsSelectedIndex - sessionsVisibleLineCount + 1;
+    }
+    sessionsScrollOffset = Math.max(0, Math.min(sessionsScrollOffset, maxOffset));
+
+    const visibleSessions = sessionsList.slice(sessionsScrollOffset, sessionsScrollOffset + sessionsVisibleLineCount);
+    const lines: string[] = ['Sessions', ''];
+    for (let i = 0; i < visibleSessions.length; i++) {
+      const s = visibleSessions[i];
+      const actualIndex = sessionsScrollOffset + i;
+      const marker = actualIndex === sessionsSelectedIndex ? '>' : ' ';
+      const isActive = s.id === currentSession.id;
+      const activeTag = isActive ? ' *' : '';
+      const time = formatRelativeTime(s.updated_at);
+      const msgs = `${s.message_count} msgs`;
+      lines.push(`${marker} ${s.title.slice(0, 45).padEnd(45)} ${time.padStart(10)} ${msgs.padStart(10)}${activeTag}`);
+    }
+    if (totalSessions > sessionsVisibleLineCount) {
+      lines.push('');
+      lines.push(`Scroll ${sessionsScrollOffset + 1}-${Math.min(sessionsScrollOffset + visibleSessions.length, totalSessions)} / ${totalSessions}`);
+    }
+    lines.push('');
+    lines.push('↑/↓ select   Enter resume   n new   r rename   d delete   PgUp/PgDn scroll   Esc/q close');
+
+    sessionsModalTextNode.content = stringToStyledText(lines.join('\n'));
+    sessionsModalNode.visible = true;
+    if (inputNode.blur) inputNode.blur();
+    root.requestRender();
   }
 
   function openProviderModal(): void {
@@ -2480,7 +2836,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   }
 
   renderer.prependInputHandler((sequence: string) => {
-    if (mcpModalOpen || mcpDetailsOpen || pendingExecution || providerModalOpen || modelModalOpen) {
+    if (mcpModalOpen || mcpDetailsOpen || pendingExecution || providerModalOpen || modelModalOpen || sessionsModalOpen) {
       return false;
     }
 
@@ -2799,11 +3155,15 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return;
     }
 
-    const visibleMatches = palette.matches.slice(0, 5);
-    const chunks = visibleMatches.flatMap((command, index) => {
-      const line = `${index === palette.selectedIndex ? '❯ ' : '  '}/${command.name} - ${command.description}`;
-      const chunk = index === palette.selectedIndex ? fg('#00d4ff')(line) : fg('#888888')(line);
-      return index < visibleMatches.length - 1 ? [chunk, fg('#888888')('\n')] : [chunk];
+    const maxVisible = 8;
+    const totalMatches = palette.matches.length;
+    const startOffset = Math.max(0, Math.min(palette.selectedIndex - Math.floor(maxVisible / 2), totalMatches - maxVisible));
+    const visibleMatches = palette.matches.slice(startOffset, startOffset + maxVisible);
+    const chunks = visibleMatches.flatMap((command, i) => {
+      const actualIndex = startOffset + i;
+      const line = `${actualIndex === palette.selectedIndex ? '❯ ' : '  '}/${command.name} - ${command.description}`;
+      const chunk = actualIndex === palette.selectedIndex ? fg('#00d4ff')(line) : fg('#888888')(line);
+      return i < visibleMatches.length - 1 ? [chunk, fg('#888888')('\n')] : [chunk];
     });
     cmdListTextNode.content = new StyledText(chunks);
     root.requestRender();
@@ -3035,7 +3395,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         ensureActiveTurn(turnId);
       }
 
-      const args = toolCall.arguments ? JSON.parse(toolCall.arguments) as Record<string, unknown> : {};
+      const args = toolCall.arguments ? JSON.parse(toolCall.arguments) as Record<string, unknown> as any : {};
       addMsg(`Using tool: ${toolCall.name}`, '#ffaa00');
 
       try {
@@ -3046,11 +3406,13 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
             addMsg(line, result.isError ? '#ff4444' : '#888888');
           }
         }
+        const toolContent = content || (result.isError ? 'Tool returned an error.' : 'Tool completed successfully.');
         messages.push({
           role: 'tool',
-          content: content || (result.isError ? 'Tool returned an error.' : 'Tool completed successfully.'),
+          content: toolContent,
           tool_call_id: toolCall.id,
         });
+        addMessage(currentSession.id, 'tool', toolContent, undefined, toolCall.id);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown tool error';
         addMsg(`Tool error (${toolCall.name}): ${message}`, '#ff4444');
@@ -3059,6 +3421,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
           content: `Error: ${message}`,
           tool_call_id: toolCall.id,
         });
+        addMessage(currentSession.id, 'tool', `Error: ${message}`, undefined, toolCall.id);
       }
     }
   }
@@ -3095,6 +3458,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     renderStatusBar();
     messages.push({ role: 'user', content: text });
     
+    const userMsgCount = messages.filter(m => m.role === 'user').length;
+    if (userMsgCount === 1) {
+      const title = autoGenerateTitle(text);
+      if (!currentSession.id) {
+        // First message in a new session - persist to DB
+        currentSession = createSession(title, resolvedProvider.id, resolvedProvider.model);
+        addMessage(currentSession.id, 'system', systemPrompt);
+      } else {
+        // Resumed session - update title
+        renameSession(currentSession.id, title);
+        currentSession = { ...currentSession, title };
+      }
+      renderHeader();
+    }
+    addMessage(currentSession.id, 'user', text);
+
     try {
       while (true) {
         ensureActiveTurn(turnId);
@@ -3111,6 +3490,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         }
 
         messages.push(response);
+        addMessage(currentSession.id, 'assistant', response.content, response.tool_calls);
 
         if (response.tool_calls && response.tool_calls.length > 0) {
           await handleToolCalls(response.tool_calls, turnId);
@@ -3143,6 +3523,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   async function executeCommand(cmd: Command, args: string[] = [], rawInput?: string) {
     addMsg(`> ${rawInput || `/${cmd.name}`}`, '#00ff88');
     if (cmd.name === 'exit' || cmd.name === 'quit') {
+      deleteEmptySessions();
       if (mcpManager) await mcpManager.disconnectAll();
       renderer.destroy();
       process.exit(0);
@@ -3241,7 +3622,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   }
 
   inputNode.onContentChange = () => {
-    if (mcpModalOpen || providerModalOpen || modelModalOpen) {
+    if (mcpModalOpen || providerModalOpen || modelModalOpen || sessionsModalOpen) {
       return;
     }
     if (pendingExecution) {
@@ -3255,7 +3636,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   };
 
   inputNode.onSubmit = async () => {
-    if (mcpModalOpen || providerModalOpen || modelModalOpen) {
+    if (mcpModalOpen || providerModalOpen || modelModalOpen || sessionsModalOpen) {
       return;
     }
     if (pendingExecution) {
@@ -3284,7 +3665,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
           renderModelModal();
           return;
         }
-        if (inputNode && !mcpModalOpen && !pendingExecution) {
+        if (inputNode && !mcpModalOpen && !pendingExecution && !sessionsModalOpen) {
           // Use insertText for proper cursor handling
           inputNode.insertText(key.sequence);
           inputBuffer = inputNode.plainText;
@@ -3297,6 +3678,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       if (await handleInterruptSignal()) {
         return;
       }
+      deleteEmptySessions();
       if (mcpManager) await mcpManager.disconnectAll();
       process.stdout.write(resetModifyOtherKeys);
       renderer.destroy();
@@ -3323,6 +3705,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return;
     }
 
+    if (sessionsModalOpen && isEscapeKey(key)) {
+      closeSessionsModal();
+      return;
+    }
+
     if (providerModalOpen && providerFormState && (key.sequence === '\x13' || (key.ctrl && key.name === 's'))) {
       await saveProviderForm();
       return;
@@ -3333,6 +3720,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
 
     if (mcpModalOpen && !key.ctrl && !key.meta) {
+      return;
+    }
+
+    if (sessionsModalOpen && !key.ctrl && !key.meta) {
       return;
     }
 
@@ -3381,7 +3772,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
   renderer.keyInput.on('paste', (event) => {
     // Handle IME/composed text input for main text area
-    if (!providerModalOpen && !modelModalOpen && !mcpModalOpen && !pendingExecution) {
+    if (!providerModalOpen && !modelModalOpen && !mcpModalOpen && !pendingExecution && !sessionsModalOpen) {
       event.preventDefault();
       const text = new TextDecoder().decode(event.bytes);
       if (text && inputNode) {
@@ -3410,6 +3801,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     if (await handleInterruptSignal()) {
       return;
     }
+    deleteEmptySessions();
     if (mcpManager) {
       await mcpManager.disconnectAll();
     }

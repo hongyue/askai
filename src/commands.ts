@@ -23,6 +23,8 @@ export function createCommands(
   onOpenMcpModal?: () => void,
   onProviderCommand?: (args: string[]) => Promise<string | void>,
   onModelCommand?: (args: string[]) => Promise<string | void>,
+  onNewSession?: () => Promise<string | void>,
+  onOpenSessionsModal?: () => void,
 ): Command[] {
   return [
     {
@@ -51,6 +53,21 @@ export function createCommands(
       action: () => {
         onOpenMcpModal?.();
         return 'Opened the MCP servers manager';
+      },
+    },
+    {
+      name: 'new',
+      description: 'start a new session',
+      action: async () => {
+        return await onNewSession?.();
+      },
+    },
+    {
+      name: 'sessions',
+      description: 'manage sessions',
+      action: () => {
+        onOpenSessionsModal?.();
+        return 'Opened the sessions manager';
       },
     },
     {
