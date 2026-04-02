@@ -1,6 +1,6 @@
 {
   "name": "askai",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "main": "src/index.ts",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.9",
