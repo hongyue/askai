@@ -1,10 +1,10 @@
-import { 
-  createCliRenderer, 
-  Box, Text, ScrollBox, StyledText, 
-  TextareaRenderable, fg, h, 
-  stringToStyledText, 
-  type KeyEvent, 
-  BoxRenderable 
+import {
+  createCliRenderer,
+  Box, Text, ScrollBox, StyledText,
+  TextareaRenderable, fg, h, white, bgWhite, black,
+  stringToStyledText,
+  type KeyEvent,
+  BoxRenderable
 } from "@opentui/core"
 import {
   findProviderByNormalizedId,
@@ -426,22 +426,47 @@ function normalizeProviderFormValues(values: Record<string, string>): Record<str
   return nextValues;
 }
 
-function formatProviderFormTextValue(value: string, cursorOffset: number): string {
+function formatProviderFormTextValue(value: string, cursorOffset: number, focused: boolean): any[] {
   const clampedOffset = Math.max(0, Math.min(cursorOffset, value.length));
-  return `${value.slice(0, clampedOffset)}█${value.slice(clampedOffset)}` || '█';
+  // Use bright background with black text for highly visible cursor
+  // Only show cursor when field is focused
+  if (focused && clampedOffset < value.length) {
+    const char = value[clampedOffset];
+    return [
+      white(value.slice(0, clampedOffset)),
+      bgWhite(black(char)),
+      white(value.slice(clampedOffset + 1)),
+    ];
+  }
+  if (focused) {
+    // Cursor at end - show as space with bright background
+    return [white(value), bgWhite(black(' '))];
+  }
+  // Not focused - no cursor
+  return [white(value)];
 }
 
-function formatFilterValue(value: string, cursorOffset: number, active: boolean): string {
+function formatFilterValue(value: string, cursorOffset: number, active: boolean): any[] {
   if (!active && value.length === 0) {
-    return '(type to filter)';
+    return [white('(type to filter)')];
   }
 
   if (!active) {
-    return value;
+    return [white(value)];
   }
 
   const clampedOffset = Math.max(0, Math.min(cursorOffset, value.length));
-  return `${value.slice(0, clampedOffset)}█${value.slice(clampedOffset)}` || '█';
+  // Use bright background with black text for highly visible cursor
+  if (clampedOffset < value.length) {
+    const char = value[clampedOffset];
+    return [
+      white(value.slice(0, clampedOffset)),
+      bgWhite(black(char)),
+      white(value.slice(clampedOffset + 1)),
+    ];
+  }
+  // Cursor at end - show as space with bright background
+  return [white(value), bgWhite(black(' '))];
 }
 
 function filterModels(models: string[], filterValue: string): string[] {
@@ -1617,24 +1642,38 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     if (providerFormState) {
       const formState = providerFormState;
       const visibleFields = getVisibleProviderFormFields(formState.providerId);
-      const lines = [
-        `Edit ${getProviderPlaceholderLabel(formState.providerId)}`,
-        '',
-        ...visibleFields.map((field, index) => {
-          const rawValue = formState.values[field.key] || '';
-          const marker = index === formState.activeFieldIndex ? '>' : ' ';
-          const value = formatProviderFormTextValue(rawValue, index === formState.activeFieldIndex ? formState.cursorOffset : rawValue.length);
-          return `${marker} ${field.label.padEnd(14)} ${value || '(empty)'}`;
-        }),
-        '',
-      ];
+      const chunks: any[] = [];
+      
+      // Title
+      chunks.push(white(`Edit ${getProviderPlaceholderLabel(formState.providerId)}`));
+      chunks.push(white('\n'));
+      chunks.push(white('\n'));
+      
+      // Fields
+      visibleFields.forEach((field, index) => {
+        const rawValue = formState.values[field.key] || '';
+        const marker = index === formState.activeFieldIndex ? '> ' : '  ';
+        const label = field.label.padEnd(14);
+        const isFocused = index === formState.activeFieldIndex;
+        const valueChunks = formatProviderFormTextValue(rawValue, formState.cursorOffset, isFocused);
+
+        chunks.push(white(marker));
+        chunks.push(white(label));
+        chunks.push(white(' '));
+        chunks.push(...valueChunks);
+        chunks.push(white('\n'));
+      });
+      
+      chunks.push(white('\n'));
 
       if (formState.error) {
-        lines.push(`Error: ${formState.error}`, '');
+        chunks.push(white(`Error: ${formState.error}`));
+        chunks.push(white('\n'));
+        chunks.push(white('\n'));
       }
 
-      lines.push('Tab/↑/↓ move   ←/→ cursor   Enter save   Esc cancel');
-      providerModalTextNode.content = stringToStyledText(lines.join('\n'));
+      chunks.push(white('Tab/↑/↓ move   ←/→ cursor   Enter save   Esc cancel'));
+      providerModalTextNode.content = new StyledText(chunks);
       providerModalNode.visible = true;
       if (inputNode.blur) {
         inputNode.blur();
@@ -1646,16 +1685,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     // Handle add provider name input state
     if (addProviderNameInput) {
       const nameInput = addProviderNameInput;
-      const value = formatProviderFormTextValue(nameInput.value, nameInput.cursorOffset);
-      const lines = [
-        'Add new provider',
-        '',
-        `Provider name: ${value || '(enter name)'}`,
-        '',
-        ...(providerModalNotice ? [`Error: ${providerModalNotice}`, ''] : []),
-        'Enter confirm   Esc cancel',
+      const valueChunks = formatProviderFormTextValue(nameInput.value, nameInput.cursorOffset, true);
+      const chunks: any[] = [
+        white('Add new provider'),
+        white('\n\n'),
+        white('Provider name: '),
+        ...valueChunks,
+        white('\n\n'),
       ];
-      providerModalTextNode.content = stringToStyledText(lines.join('\n'));
+      
+      if (providerModalNotice) {
+        chunks.push(white(`Error: ${providerModalNotice}`));
+        chunks.push(white('\n\n'));
+      }
+      
+      chunks.push(white('Enter confirm   Esc cancel'));
+      providerModalTextNode.content = new StyledText(chunks);
       providerModalNode.visible = true;
       if (inputNode.blur) {
         inputNode.blur();
@@ -1791,8 +1836,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     ];
 
     const filterContent = [
-      `Filter  ${formatFilterValue(modelModalFilter.value, modelModalFilter.cursorOffset, modelModalFocus === 'filter')}`,
+      white('Filter  '),
     ];
+    const filterValueChunks = formatFilterValue(modelModalFilter.value, modelModalFilter.cursorOffset, modelModalFocus === 'filter');
+    filterContent.push(...filterValueChunks);
 
     const modelContent = [
       `Models${selectedProvider ? ` (${selectedProvider.displayName})` : ''}`,
@@ -1812,7 +1859,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     
     modelModalTitleTextNode.content = stringToStyledText(titleContent.join('\n'));
     modelModalProvidersTextNode.content = stringToStyledText(providerContent.join('\n'));
-    modelModalFilterTextNode.content = stringToStyledText(filterContent.join('\n'));
+    modelModalFilterTextNode.content = new StyledText(filterContent);
     modelModalModelsTextNode.content = stringToStyledText(modelContent.join('\n'));
     modelModalNode.visible = true;
     if (inputNode.blur) {
