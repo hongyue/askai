@@ -520,7 +520,7 @@ function getVisibleProviderFormFields(providerId: string): ProviderFormField[] {
   const preset = getPresetProviderMeta(providerId);
   const isCustomLike = !preset || preset.kind === 'custom';
   const isCustomProvider = !preset;  // Only true custom providers (not presets)
-  
+
   return providerFormFields.filter(field => {
     if (field.key === 'id') {
       return isCustomProvider;  // Only show for custom providers
@@ -751,7 +751,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       renderSessionsModal();
     },
   );
-  
+
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
     screenMode: 'alternate-screen',
@@ -1049,7 +1049,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
     return false;
   });
-  
+
   let isProcessing = false;
   let inputBuffer = '';
   let palette: PaletteState = {
@@ -1131,16 +1131,37 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
     return false;
   }
-  
+
   const root = Box({ width: '100%', height: '100%', flexDirection: 'column' });
-  root.add(Text({ id: 'header-text', content: ` Welcome to askai! (${provider.label} / ${provider.model})`, fg: '#00d4ff' }));
-  
+  // root.add(Text({ 
+  //   id: 'header-text', 
+  //   content: ` Welcome to askai! (${provider.label} / ${provider.model})`, 
+  //   fg: '#00d4ff',
+  // }));
+  root.add(Box(
+    {
+      id: 'header-box',
+      width: '100%',
+      minHeight: 1,
+      flexShrink: 0,
+      marginBottom: 1,
+      border: false,
+      flexDirection: 'row',
+    },
+    Text({
+      id: 'header-text',
+      content: ` Welcome to askai! (${provider.label} / ${provider.model})`,
+      fg: '#00d4ff',
+    }),
+  ));
+
   const chat = ScrollBox({
     id: 'chat-box',
     width: '100%',
     flexGrow: 1,
     minHeight: 0,
-    padding: 1,
+    paddingX: 1,
+    marginBottom: 1,
     scrollY: true,
     stickyScroll: true,
     stickyStart: 'bottom',
@@ -1164,7 +1185,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     width: '100%',
     height: 1,
     flexShrink: 0,
-    backgroundColor: '#181818',
+    backgroundColor: '#1f1f1f',
+    marginTop: 1,
     paddingLeft: 0,
     paddingRight: 1,
   });
@@ -1269,14 +1291,14 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     fg: '#d8d8d8',
   });
   modelModal.add(modelModalTitleText);
-  
+
   const modelModalContentRow = Box({
     id: 'model-modal-content-row',
     width: '100%',
     height: 'auto',
     flexDirection: 'row',
   });
-  
+
   const modelModalLeftColumn = Box({
     id: 'model-modal-left',
     width: '35%',
@@ -1292,7 +1314,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     fg: '#d8d8d8',
   });
   modelModalLeftColumn.add(modelModalProvidersText);
-  
+
   const modelModalRightColumn = Box({
     id: 'model-modal-right',
     flexGrow: 1,
@@ -1312,11 +1334,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   });
   modelModalRightColumn.add(modelModalFilterText);
   modelModalRightColumn.add(modelModalModelsText);
-  
+
   modelModalContentRow.add(modelModalLeftColumn);
   modelModalContentRow.add(modelModalRightColumn);
   modelModal.add(modelModalContentRow);
-  
+
   const sessionsModal = Box({
     id: 'sessions-modal',
     position: 'absolute',
@@ -1346,14 +1368,14 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     paddingLeft: 0,
     paddingRight: 1,
   });
-  inputRow.add(Box({ 
+  inputRow.add(Box({
     width: 2,
     height: '100%',
-    flexDirection: 'column', 
+    flexDirection: 'column',
     backgroundColor: '#1f1f1f',
     border: false,
-  }).add(Text({ content: '>', fg: '#00d4ff'})));
-  
+  }).add(Text({ content: '>', fg: '#00d4ff' })));
+
   const input = h(TextareaRenderable, {
     id: 'main-input',
     flexGrow: 1,
@@ -1372,28 +1394,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   });
   inputRow.add(input);
 
-  const bottomBox = Box({
-    id: 'bottom-box',
+  const footerBox = Box({
+    id: 'footer-box',
     width: '100%',
     height: 'auto',
+    paddingTop: 1,
     flexShrink: 0,
-    flexDirection: 'row',
-  });
-  const inputBox = Box({
-    id: 'input-box',
-    width: '100%',
-    height: 'auto',
     flexDirection: 'column',
     backgroundColor: '#1f1f1f',
     border: ['left'],
     borderColor: '#ff9e3d',
     customBorderChars: promptAccentBorderChars,
   });
-  inputBox.add(inputRow);
-  inputBox.add(cmdListBox);
-  inputBox.add(statusBar);
-  bottomBox.add(inputBox);
-  root.add(bottomBox);
+  footerBox.add(inputRow);
+  footerBox.add(cmdListBox);
+  footerBox.add(statusBar);
+  root.add(footerBox);
   root.add(approvalDialog);
   root.add(mcpModal);
   root.add(mcpDetailsModal);
@@ -1546,7 +1562,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   }
 
   function renderHeader(): void {
-    headerTextNode.content = stringToStyledText(` ${currentSession.title} (${provider.label} / ${provider.model})`);
+    headerTextNode.content = stringToStyledText(` Welcome to askai! (${provider.label} / ${provider.model})`);
     root.requestRender();
   }
 
@@ -1561,7 +1577,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   function getProviderSlots(): ProviderSlot[] {
     const slots: ProviderSlot[] = [];
     const addedNormalizedIds = new Set<string>();
-    
+
     // First add all preset providers
     for (const preset of presetProviderMeta) {
       // Find actual config key (case-insensitive) to preserve original case
@@ -1570,7 +1586,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       );
       const providerId = configKey || preset.id;
       addedNormalizedIds.add(providerId.toLowerCase());
-      
+
       const storedProvider = config.providers[providerId];
       if (storedProvider) {
         const resolvedConfig = resolveProviderConfig(config, providerId);
@@ -1598,11 +1614,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         });
       }
     }
-    
+
     // Then add custom providers from config (not presets)
     for (const [providerId, providerConfig] of Object.entries(config.providers)) {
       if (addedNormalizedIds.has(providerId.toLowerCase())) continue;
-      
+
       const resolvedConfig = resolveProviderConfig(config, providerId);
       slots.push({
         id: providerId,
@@ -1616,7 +1632,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         resolved: resolvedConfig,
       });
     }
-    
+
     return slots;
   }
 
@@ -1753,7 +1769,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
 
     delete config.providers[providerId];
-    
+
     if (config.provider === providerId) {
       const remaining = Object.keys(config.providers);
       if (remaining.length > 0) {
@@ -2002,12 +2018,12 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       const formState = providerFormState;
       const visibleFields = getVisibleProviderFormFields(formState.providerId);
       const chunks: any[] = [];
-      
+
       // Title
       chunks.push(white(`Edit ${getProviderPlaceholderLabel(formState.providerId)}`));
       chunks.push(white('\n'));
       chunks.push(white('\n'));
-      
+
       // Fields
       visibleFields.forEach((field, index) => {
         const rawValue = formState.values[field.key] || '';
@@ -2022,7 +2038,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         chunks.push(...valueChunks);
         chunks.push(white('\n'));
       });
-      
+
       chunks.push(white('\n'));
 
       if (formState.error) {
@@ -2052,12 +2068,12 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         ...valueChunks,
         white('\n\n'),
       ];
-      
+
       if (providerModalNotice) {
         chunks.push(white(`Error: ${providerModalNotice}`));
         chunks.push(white('\n\n'));
       }
-      
+
       chunks.push(white('Enter confirm   Esc cancel'));
       providerModalTextNode.content = new StyledText(chunks);
       providerModalNode.visible = true;
@@ -2215,7 +2231,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     modelContent.push('', canDelete
       ? 'Tab switch list   ↑/↓ move   Enter use model   d delete model   Esc/q close'
       : 'Tab switch list   ↑/↓ move   Enter use model   Esc/q close');
-    
+
     modelModalTitleTextNode.content = stringToStyledText(titleContent.join('\n'));
     modelModalProvidersTextNode.content = stringToStyledText(providerContent.join('\n'));
     modelModalFilterTextNode.content = new StyledText(filterContent);
@@ -3046,12 +3062,12 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
     const toolLines = selectedState.tools.length > 0
       ? selectedState.tools.flatMap(tool => {
-          const lines = wrapLines(`- ${tool.name}`);
-          if (tool.description) {
-            lines.push(...wrapLines(tool.description, 58, '  '));
-          }
-          return lines;
-        })
+        const lines = wrapLines(`- ${tool.name}`);
+        if (tool.description) {
+          lines.push(...wrapLines(tool.description, 58, '  '));
+        }
+        return lines;
+      })
       : ['- No tools discovered'];
 
     return [
@@ -3183,8 +3199,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     const normalized = query.toLowerCase();
     const matches = query
       ? commands.filter(command =>
-          command.name.toLowerCase().includes(normalized)
-        )
+        command.name.toLowerCase().includes(normalized)
+      )
       : [...commands];
 
     if (matches.length === 0) {
@@ -3434,7 +3450,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
 
     if (!text.trim()) return;
-    
+
     if (text.startsWith('/')) {
       const parts = text.slice(1).trim().split(/\s+/).filter(Boolean);
       const commandName = parts[0];
@@ -3444,7 +3460,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         return;
       }
     }
-    
+
     isProcessing = true;
     const turnId = nextTurnId++;
     const controller = new AbortController();
@@ -3457,7 +3473,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     addMsg('Thinking...', '#888888');
     renderStatusBar();
     messages.push({ role: 'user', content: text });
-    
+
     const userMsgCount = messages.filter(m => m.role === 'user').length;
     if (userMsgCount === 1) {
       const title = autoGenerateTitle(text);
@@ -3519,7 +3535,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
     renderStatusBar();
   }
-  
+
   async function executeCommand(cmd: Command, args: string[] = [], rawInput?: string) {
     addMsg(`> ${rawInput || `/${cmd.name}`}`, '#00ff88');
     if (cmd.name === 'exit' || cmd.name === 'quit') {
@@ -3561,7 +3577,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     resetInput();
     await handleInput(text);
   }
-  
+
   function syncCommandPalette(value: string) {
     inputBuffer = value;
     if (value === '' || !value.startsWith('/')) {
@@ -3605,7 +3621,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         const code = c.charCodeAt(0);
         return code >= 32 || code > 127; // Allow ASCII printable and non-ASCII (IME) chars
       });
-      
+
       if (isPrintable) {
         const nextValue = inputBuffer + key.sequence;
         const startsCommandMode = inputBuffer === '' && key.sequence === '/';
@@ -3644,7 +3660,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
     await submitCurrentInput();
   };
-  
+
   // Handle global keyboard
   renderer.keyInput.on('keypress', async (key: KeyEvent) => {
     // Handle IME/composed text input (Chinese/Japanese/Korean)
@@ -3652,7 +3668,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     if (key.sequence && key.sequence.length > 0 && !key.sequence.includes('\x1b')) {
       const hasNonAscii = [...key.sequence].some(c => c.charCodeAt(0) > 127);
       const isMultiCharText = key.sequence.length > 1;
-      
+
       if (hasNonAscii || isMultiCharText) {
         // This is likely IME/composed text input
         if (providerModalOpen && providerFormState) {
@@ -3673,7 +3689,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         return;
       }
     }
-    
+
     if (key.ctrl && key.name === 'c') {
       if (await handleInterruptSignal()) {
         return;
@@ -3732,7 +3748,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
 
     applyKeyToBuffer(key);
-    
+
     if (palette.open && key.name === 'escape') {
       clearCommandInput();
       return;
@@ -3782,7 +3798,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       }
       return;
     }
-    
+
     if (providerModalOpen && providerFormState) {
       event.preventDefault();
       const text = new TextDecoder().decode(event.bytes);
@@ -3817,7 +3833,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       renderStatusBar();
     }
   }, 120);
-  
+
   updateFooterLayout();
   renderStatusBar();
   inputNode.focus();
