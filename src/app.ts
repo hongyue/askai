@@ -704,6 +704,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   let modelModalModelScrollOffset = 0;
   let modelModalFilter: FilterState = { value: '', cursorOffset: 0 };
   let addModelInput: { value: string; cursorOffset: number } | null = null;
+  let addModelInputProviderId = '';
+  let addModelInputProviderName = '';
   let providerFormState: ProviderFormState | null = null;
   let providerModalNotice: string | null = null;
   let modelModalNotice: string | null = null;
@@ -1839,7 +1841,6 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
   function closeModelModal(): void {
     modelModalOpen = false;
-    addModelInput = null;
     modelModalNode.visible = false;
     modelModalTitleTextNode.content = stringToStyledText('');
     modelModalProvidersTextNode.content = stringToStyledText('');
@@ -2026,7 +2027,6 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     modelModalFocus = 'models';
     modelModalNotice = null;
     modelModalFilter = { value: '', cursorOffset: 0 };
-    addModelInput = null;
     providerModalNode.visible = false;
     syncModelModalSelection(providerId || resolvedProvider.id, providerId === resolvedProvider.id ? resolvedProvider.model : undefined);
     renderModelModal();
@@ -2243,8 +2243,6 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     const filterValueChunks = formatFilterValue(modelModalFilter.value, modelModalFilter.cursorOffset, modelModalFocus === 'filter');
     filterContent.push(...filterValueChunks);
 
-    let modelContent: (string | any[])[];
-
     if (addModelInput) {
       const val = addModelInput.value;
       const cursor = Math.max(0, Math.min(addModelInput.cursorOffset, val.length));
@@ -2259,38 +2257,49 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       } else {
         cursorChunks = [white(val), bgWhite(black(' '))];
       }
-      modelContent = [
-        `Models${selectedProvider ? ` (${selectedProvider.displayName})` : ''}`,
-        '',
-        white('Add model: '),
+      const chunks: any[] = [
+        white(`Add model to ${addModelInputProviderName}`),
+        white('\n\n'),
+        white('Model name: '),
         ...cursorChunks,
       ];
       if (modelModalNotice) {
-        modelContent.push('', `Notice: ${modelModalNotice}`);
+        chunks.push(white('\n\n'));
+        chunks.push(fg('#ff4444')(`Error: ${modelModalNotice}`));
       }
-      modelContent.push('', 'Enter confirm   Esc cancel   ←/→ move cursor');
-    } else {
-      modelContent = [
-        `Models${selectedProvider ? ` (${selectedProvider.displayName})` : ''}`,
-        ...(modelModalModelScrollOffset > 0 ? ['  ^ more'] : []),
-        ...(modelLines.length > 0 ? modelLines : ['  No models available']),
-        ...(modelModalModelScrollOffset + providerModalVisibleModels < models.length ? ['  v more'] : []),
-      ];
+      chunks.push(white('\n\n'));
+      chunks.push(white('Enter confirm   Esc cancel   ←/→ move cursor'));
 
-      if (modelModalNotice) {
-        modelContent.push('', `Notice: ${modelModalNotice}`);
-      }
-
-      const canDelete = selectedProvider ? models.length > 1 : false;
-      const helpParts = [];
-      helpParts.push('Tab switch list');
-      helpParts.push('↑/↓ move');
-      helpParts.push('Enter use model');
-      if (canDelete) helpParts.push('d delete model');
-      helpParts.push('+/a add model');
-      helpParts.push('Esc/q close');
-      modelContent.push('', helpParts.join('   '));
+      modelModalTitleTextNode.content = stringToStyledText(titleContent.join('\n'));
+      modelModalProvidersTextNode.content = stringToStyledText(providerContent.join('\n'));
+      modelModalFilterTextNode.content = stringToStyledText('');
+      modelModalModelsTextNode.content = new StyledText(chunks);
+      modelModalNode.visible = true;
+      if (inputNode.blur) inputNode.blur();
+      root.requestRender();
+      return;
     }
+
+    const modelContent = [
+      `Models${selectedProvider ? ` (${selectedProvider.displayName})` : ''}`,
+      ...(modelModalModelScrollOffset > 0 ? ['  ^ more'] : []),
+      ...(modelLines.length > 0 ? modelLines : ['  No models available']),
+      ...(modelModalModelScrollOffset + providerModalVisibleModels < models.length ? ['  v more'] : []),
+    ];
+
+    if (modelModalNotice) {
+      modelContent.push('', `Notice: ${modelModalNotice}`);
+    }
+
+    const canDelete = selectedProvider ? models.length > 1 : false;
+    const helpParts = [];
+    helpParts.push('Tab switch list');
+    helpParts.push('↑/↓ move');
+    helpParts.push('Enter use model');
+    if (canDelete) helpParts.push('d delete model');
+    helpParts.push('+/a add model');
+    helpParts.push('Esc/q close');
+    modelContent.push('', helpParts.join('   '));
 
     modelModalTitleTextNode.content = stringToStyledText(titleContent.join('\n'));
     modelModalProvidersTextNode.content = stringToStyledText(providerContent.join('\n'));
@@ -2403,6 +2412,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     const selectedProvider = getSelectedModelModalProvider();
     if (!selectedProvider) return;
     addModelInput = { value: '', cursorOffset: 0 };
+    addModelInputProviderId = selectedProvider.id;
+    addModelInputProviderName = selectedProvider.displayName;
     modelModalNotice = null;
     renderModelModal();
   }
@@ -2452,10 +2463,14 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return;
     }
 
-    const selectedProvider = getSelectedModelModalProvider();
-    if (!selectedProvider) return;
+    const provider = config.providers[addModelInputProviderId];
+    if (!provider) {
+      modelModalNotice = 'Provider not found';
+      addModelInput = null;
+      renderModelModal();
+      return;
+    }
 
-    const provider = config.providers[selectedProvider.id];
     const existingModels = (provider.models && provider.models.length > 0 ? provider.models : [provider.model]).filter(Boolean);
     if (existingModels.map(m => m.trim()).includes(modelName)) {
       modelModalNotice = `Model "${modelName}" already exists for this provider`;
@@ -2466,15 +2481,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
     const newModelList = [...existingModels, modelName];
     provider.models = normalizeModels(newModelList, provider.model);
-
-    if (resolvedProvider.id === selectedProvider.id) {
-      await runtime.switchModel(modelName, false);
-    }
     await runtime.persistConfig();
 
     addModelInput = null;
-    modelModalNotice = `Added model ${modelName} to ${selectedProvider.displayName}`;
-    syncModelModalSelection(selectedProvider.id);
+    modelModalNotice = `Added model ${modelName} to ${addModelInputProviderName}`;
+    syncModelModalSelection(addModelInputProviderId);
     await refreshActiveProviderView();
     renderModelModal();
   }
@@ -2924,6 +2935,12 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       renderModelModal();
       return true;
     }
+
+    if (modelModalFocus !== 'filter' && (isChar(sequence, '+') || isCharIgnoreCase(sequence, 'a'))) {
+      startAddModelInput();
+      return true;
+    }
+
     if (modelModalFocus === 'filter') {
       if (isArrowLeft(sequence)) {
         moveModelFilterCursor(-1);
@@ -3006,10 +3023,6 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         }
       }
       renderModelModal();
-      return true;
-    }
-    if (isChar(sequence, '+') || isCharIgnoreCase(sequence, 'a')) {
-      startAddModelInput();
       return true;
     }
     if (isCharIgnoreCase(sequence, 'd')) {
@@ -3994,6 +4007,14 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       const text = new TextDecoder().decode(event.bytes);
       insertModelFilterPaste(text);
       renderModelModal();
+      return;
+    }
+    if (addModelInput) {
+      event.preventDefault();
+      const text = new TextDecoder().decode(event.bytes);
+      insertAddModelPaste(text);
+      renderModelModal();
+      return;
     }
   });
 
