@@ -58,9 +58,23 @@ jobs:
           tar -czf ${{ matrix.asset }}.tar.gz -C release-bundle askai install.sh settings.default.json
           shasum -a 256 ${{ matrix.asset }}.tar.gz > ${{ matrix.asset }}.tar.gz.sha256
 
+      - name: Extract tag name
+        id: tag
+        run: echo "name=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
             ${{ matrix.asset }}.tar.gz
             ${{ matrix.asset }}.tar.gz.sha256
+          tag_name: ${{ steps.tag.outputs.name }}
+          body: |
+            ## Release Version: ${{ steps.tag.outputs.name }}
+            
+            <details>
+            <summary><strong>Changes</strong></summary>
+            
+            ${{ github.event.head_commit.message }}
+            
+            </details>
