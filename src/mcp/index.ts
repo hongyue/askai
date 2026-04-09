@@ -1,14 +1,10 @@
 import { Config, MCPServerConfig } from '../config';
 import { MCPClientWrapper, MCPTool, MCPToolResult } from './client';
 
-export interface MCPManagerOptions {
-  autoExecute?: boolean;
-}
-
 export interface MCPServerState {
   name: string;
   connected: boolean;
-  enabled: boolean;
+  autoConnect: boolean;
   toolCount: number;
   transport: 'stdio' | 'http' | 'unknown';
   target: string;
@@ -21,17 +17,12 @@ export class MCPManager {
   private serverConfigs: Map<string, MCPServerConfig> = new Map();
   private serverTools: Map<string, MCPTool[]> = new Map();
   private toolToServer: Map<string, string> = new Map();
-  private enabledServers: Set<string> = new Set();
   private lastErrors: Map<string, string> = new Map();
-  private globalAutoExecute: boolean;
 
   constructor(config: Config) {
-    this.globalAutoExecute = config.mcp?.autoExecute ?? false;
-
     if (config.mcpServers) {
       for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
         this.serverConfigs.set(name, serverConfig);
-        this.enabledServers.add(name);
       }
     }
   }
@@ -42,6 +33,16 @@ export class MCPManager {
 
   async connectAll(): Promise<void> {
     for (const name of this.serverConfigs.keys()) {
+      await this.connectServer(name);
+    }
+    await this.refreshTools();
+  }
+
+  async connectAutoConnect(): Promise<void> {
+    for (const [name, config] of this.serverConfigs.entries()) {
+      if (!config.autoConnect) {
+        continue;
+      }
       await this.connectServer(name);
     }
     await this.refreshTools();
@@ -62,7 +63,6 @@ export class MCPManager {
     try {
       await client.connect(config);
       this.servers.set(name, client);
-      this.enabledServers.add(name);
       this.lastErrors.delete(name);
     } catch (error) {
       this.lastErrors.set(name, error instanceof Error ? error.message : 'Unknown error');
@@ -100,32 +100,6 @@ export class MCPManager {
     }
   }
 
-  setServerEnabled(name: string, enabled: boolean): void {
-    if (!this.serverConfigs.has(name)) {
-      throw new Error(`MCP server "${name}" is not configured`);
-    }
-
-    if (enabled) {
-      this.enabledServers.add(name);
-    } else {
-      this.enabledServers.delete(name);
-    }
-  }
-
-  isServerEnabled(name: string): boolean {
-    return this.enabledServers.has(name);
-  }
-
-  setAllEnabled(enabled: boolean): void {
-    if (enabled) {
-      for (const name of this.serverConfigs.keys()) {
-        this.enabledServers.add(name);
-      }
-    } else {
-      this.enabledServers.clear();
-    }
-  }
-
   async refreshTools(): Promise<void> {
     this.serverTools.clear();
     this.toolToServer.clear();
@@ -155,14 +129,6 @@ export class MCPManager {
     );
   }
 
-  listEnabledTools(): Promise<MCPTool[]> {
-    return Promise.resolve(
-      Array.from(this.serverTools.entries())
-        .filter(([serverName]) => this.enabledServers.has(serverName))
-        .flatMap(([, tools]) => tools)
-    );
-  }
-
   listServerStates(): MCPServerState[] {
     return Array.from(this.serverConfigs.entries()).map(([name, config]) => {
       const client = this.servers.get(name);
@@ -170,7 +136,7 @@ export class MCPManager {
       return {
         name,
         connected: client?.connected ?? false,
-        enabled: this.enabledServers.has(name),
+        autoConnect: config.autoConnect ?? false,
         toolCount: tools.length,
         transport: config.url ? 'http' : config.command ? 'stdio' : 'unknown',
         target: config.url || [config.command, ...(config.args || [])].filter(Boolean).join(' '),
@@ -190,9 +156,6 @@ export class MCPManager {
     if (!serverName) {
       throw new Error(`Tool "${toolName}" not found in any connected MCP server`);
     }
-    if (!this.enabledServers.has(serverName)) {
-      throw new Error(`Tool "${toolName}" is disabled because MCP server "${serverName}" is disabled`);
-    }
 
     const client = this.servers.get(serverName);
     if (!client?.connected) {
@@ -201,17 +164,6 @@ export class MCPManager {
 
     return await client.callTool(toolName, args);
   }
-
-  shouldAutoExecute(serverName?: string): boolean {
-    if (serverName) {
-      const config = this.serverConfigs.get(serverName);
-      if (config?.autoExecute !== undefined) {
-        return config.autoExecute;
-      }
-    }
-    return this.globalAutoExecute;
-  }
-
   getServerForTool(toolName: string): string | undefined {
     return this.toolToServer.get(toolName);
   }

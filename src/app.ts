@@ -383,16 +383,16 @@ async function initializeRuntime(options: RunAppOptions): Promise<{
   let mcpManager: MCPManager | undefined;
   let mcpTools: MCPTool[] = [];
 
-  if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
+  if (options.mcpEnabled && config.mcpServers && Object.keys(config.mcpServers).length > 0) {
     mcpManager = new MCPManager(config);
-    await mcpManager.connectAll();
-    mcpTools = await mcpManager.listEnabledTools();
+      await mcpManager.connectAutoConnect();
+      mcpTools = await mcpManager.listAllTools();
   }
 
   let resolvedProvider = resolveProviderConfig(config);
   let provider = await createProviderFromConfig(resolvedProvider);
   const systemPrompt = config.system_prompt || 'You are a helpful terminal assistant.';
-  const state = createInitialState(options.allowExecute, options.mcpEnabled);
+  const state = createInitialState(options.allowExecute);
 
   function convertTools(providerType: ProviderType, tools: MCPTool[]): any[] {
     if (tools.length === 0) return [];
@@ -410,11 +410,11 @@ async function initializeRuntime(options: RunAppOptions): Promise<{
   const refreshProviderTools = async () => {
     if (mcpManager) {
       await mcpManager.refreshTools();
-      mcpTools = await mcpManager.listEnabledTools();
+      mcpTools = await mcpManager.listAllTools();
     } else {
       mcpTools = [];
     }
-    providerTools = state.mcpEnabled ? convertTools(resolvedProvider.type, mcpTools) : [];
+    providerTools = convertTools(resolvedProvider.type, mcpTools);
   };
 
   const persistConfig = async () => {
@@ -609,17 +609,16 @@ function formatApprovalDialogCommand(block: CommandBlock): string {
 async function getAssistantResponse(
   provider: Awaited<ReturnType<typeof createProviderFromConfig>>,
   messages: Message[],
-  mcpEnabled: boolean,
   providerTools: any[],
   options?: ChatOptions,
 ): Promise<Message> {
-  if (mcpEnabled && providerTools.length > 0) {
+  if (providerTools.length > 0) {
     return await provider.chatComplete(messages, providerTools, options);
   }
 
   let fullResponse = '';
   let usage: TokenUsage | undefined;
-  for await (const chunk of provider.chat(messages, mcpEnabled ? providerTools : [], options)) {
+  for await (const chunk of provider.chat(messages, providerTools, options)) {
     if (chunk.content) fullResponse += chunk.content;
     if (chunk.usage) {
       usage = chunk.usage;
@@ -692,7 +691,7 @@ export async function runOneShotApp(options: RunAppOptions & { question: string 
     while (true) {
       console.log(`${oneShotFeedbackColor}${getRandomOneShotFeedbackPrompt()}${ansiReset}`);
       const responseStartedAt = Date.now();
-      const response = await getAssistantResponse(provider, messages, state.mcpEnabled, providerTools);
+      const response = await getAssistantResponse(provider, messages, providerTools);
       const tokenSpeed = calculateTokenSpeed(response.usage, responseStartedAt);
       if (session.id) {
         const updatedSession = recordSessionUsage(session.id, response.usage, tokenSpeed);
@@ -754,7 +753,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   let mcpDetailsOpen = false;
   let mcpServerIndex = 0;
   let mcpDetailsScrollOffset = 0;
-  let mcpFocus: 'server' | 'global' = 'server';
+  let mcpFocus: 'server' = 'server';
   let providerModalOpen = false;
   let providerModalProviderIndex = 0;
   let providerModalProviderScrollOffset = 0;
@@ -779,9 +778,6 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       void runtime.refreshProviderTools().then(() => {
         providerTools = runtime.getProviderTools();
       });
-      if (!state.mcpEnabled) {
-        providerTools = [];
-      }
     },
     () => {
       while (chatNodeIds.length > 0) {
@@ -916,13 +912,12 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         }
         return true;
       }
-      if (isTab(sequence)) {
-        mcpFocus = mcpFocus === 'server' ? 'global' : 'server';
-        renderMcpModal();
+      if (isCharIgnoreCase(sequence, 'c')) {
+        void runMcpModalConnectionAction();
         return true;
       }
       if (sequence === ' ') {
-        void runMcpModalToggle();
+        void toggleMcpServerAutoConnect();
         return true;
       }
       if (isEnter(sequence)) {
@@ -1305,6 +1300,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     visible: false,
     backgroundColor: '#1b1b1b',
     padding: 1,
+    border: true,
+    borderColor: '#ffaa00',
   });
   const approvalDialogText = Text({
     id: 'approval-dialog-text',
@@ -1324,6 +1321,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     visible: false,
     backgroundColor: '#161616',
     padding: 1,
+    border: true,
+    borderColor: '#3f6d8f',
   });
   const mcpModalText = Text({
     id: 'mcp-modal-text',
@@ -1343,6 +1342,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     visible: false,
     backgroundColor: '#101010',
     padding: 1,
+    border: true,
+    borderColor: '#3f6d8f',
   });
   const mcpDetailsModalText = Text({
     id: 'mcp-details-modal-text',
@@ -1362,6 +1363,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     visible: false,
     backgroundColor: '#141414',
     padding: 1,
+    border: true,
+    borderColor: '#ff9e3d',
   });
   const providerModalText = Text({
     id: 'provider-modal-text',
@@ -1381,6 +1384,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     visible: false,
     backgroundColor: '#141414',
     padding: 1,
+    border: true,
+    borderColor: '#ff9e3d',
   });
   const modelModalTitleText = Text({
     id: 'model-modal-title-text',
@@ -1447,6 +1452,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     visible: false,
     backgroundColor: '#141414',
     padding: 1,
+    border: true,
+    borderColor: '#6d8f5b',
   });
   const sessionsModalText = Text({
     id: 'sessions-modal-text',
@@ -3206,11 +3213,6 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
   }
 
-  function getMcpGlobalToggleLine(): string {
-    const label = state.mcpEnabled ? 'MCP Servers Enabled' : 'MCP Servers Disabled';
-    return mcpFocus === 'global' ? `[ ${label} ]` : `  ${label}  `;
-  }
-
   function renderMcpModal(): void {
     if (!mcpModalOpen) {
       closeMcpModal();
@@ -3229,20 +3231,18 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     const selectedState = states[mcpServerIndex];
     const summaryLines = [
       `Selected: ${selectedState.name}`,
-      `${selectedState.transport} • ${selectedState.connected ? 'connected' : 'disconnected'} • ${selectedState.enabled ? 'enabled' : 'disabled'}`,
+      `${selectedState.transport} • ${selectedState.connected ? 'connected' : 'disconnected'}`,
       `Target: ${selectedState.target || 'n/a'}`,
-      `Tools: ${selectedState.toolCount}`,
+      `Connect on startup: ${selectedState.autoConnect ? 'yes' : 'no'}`,
       selectedState.lastError ? `Last error: ${selectedState.lastError}` : '',
       '',
-      `Space: ${selectedState.enabled ? 'disable' : 'enable'} selected server`,
     ].filter(Boolean).join('\n');
 
     const header = stringToStyledText('MCP Servers\n\n');
     const serverChunks = states.flatMap((server, index) => {
       const marker = index === mcpServerIndex ? '>' : ' ';
-      const enabled = server.enabled ? 'enabled ' : 'disabled';
       const connected = server.connected ? 'connected   ' : 'disconnected';
-      const line = `${marker} ${server.name.padEnd(16)} ${connected} ${enabled} ${String(server.toolCount).padStart(2)} tools`;
+      const line = `${marker} ${server.name.padEnd(16)} ${connected} ${String(server.toolCount).padStart(2)} tools`;
       const isFocused = mcpFocus === 'server' && index === mcpServerIndex;
       const chunk = isFocused ? fg('#00d4ff')(line) : fg('#a8a8a8')(line);
       return index < states.length - 1 ? [chunk, fg('#a8a8a8')('\n')] : [chunk];
@@ -3253,9 +3253,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       'Summary',
       summaryLines,
       '',
-      getMcpGlobalToggleLine(),
-      '',
-      '↑/↓ select server   Tab switch focus   Space toggle   Enter details   Esc/q close',
+      '↑/↓ select server   C connect/disconnect   Space toggle auto-connect   Enter details   Esc/q close',
     ].join('\n'));
     mcpModalTextNode.content = new StyledText([
       ...header.chunks,
@@ -3343,7 +3341,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       ...wrapLines(`Transport: ${selectedState.transport}`),
       ...wrapLines(`Target: ${selectedState.target || 'n/a'}`),
       ...wrapLines(`Status: ${selectedState.connected ? 'connected' : 'disconnected'}`),
-      ...wrapLines(`Usage: ${selectedState.enabled ? 'enabled' : 'disabled'}`),
+      ...wrapLines(`Connect on startup: ${selectedState.autoConnect ? 'yes' : 'no'}`),
       ...wrapLines(`Tools: ${selectedState.toolCount}`),
       ...(selectedState.lastError ? wrapLines(`Last error: ${selectedState.lastError}`) : []),
     ];
@@ -3389,7 +3387,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
   };
 
-  async function runMcpModalToggle(): Promise<void> {
+  async function runMcpModalConnectionAction(): Promise<void> {
     if (!mcpManager) {
       closeMcpModal();
       return;
@@ -3397,19 +3395,43 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
     const states = runtime.getMcpServerStates();
     const selectedState = states[mcpServerIndex];
+    if (!selectedState || mcpFocus !== 'server') {
+      return;
+    }
+
+    try {
+      if (selectedState.connected) {
+        await mcpManager.disconnectServer(selectedState.name);
+      } else {
+        await mcpManager.connectServer(selectedState.name);
+      }
+      await runtime.refreshProviderTools();
+      providerTools = runtime.getProviderTools();
+    } catch (error) {
+      addMsg(`MCP error: ${error instanceof Error ? error.message : 'Unknown error'}`, '#ff4444');
+    }
+
+    renderMcpModal();
+  }
+
+  async function toggleMcpServerAutoConnect(): Promise<void> {
+    const states = runtime.getMcpServerStates();
+    const selectedState = states[mcpServerIndex];
     if (!selectedState) {
       return;
     }
 
-    if (mcpFocus === 'server') {
-      mcpManager.setServerEnabled(selectedState.name, !selectedState.enabled);
-    } else {
-      state.mcpEnabled = !state.mcpEnabled;
+    const serverConfig = config.mcpServers?.[selectedState.name];
+    if (!serverConfig) {
+      return;
     }
 
-    await runtime.refreshProviderTools();
-    providerTools = runtime.getProviderTools();
+    serverConfig.autoConnect = !serverConfig.autoConnect;
+    await runtime.persistConfig();
     renderMcpModal();
+    if (mcpDetailsOpen) {
+      renderMcpDetailsModal();
+    }
   }
 
   function getApprovalActionsLine(): string {
@@ -3782,7 +3804,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       while (true) {
         ensureActiveTurn(turnId);
         const responseStartedAt = Date.now();
-        const response = await getAssistantResponse(provider, messages, state.mcpEnabled, providerTools, {
+        const response = await getAssistantResponse(provider, messages, providerTools, {
           signal: controller.signal,
         });
         ensureActiveTurn(turnId);

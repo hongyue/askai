@@ -26,11 +26,7 @@ export interface MCPServerConfig {
   command?: string;
   args?: string[];
   url?: string;
-  autoExecute?: boolean;
-}
-
-export interface MCPConfig {
-  autoExecute?: boolean;
+  autoConnect?: boolean;
 }
 
 export interface Config {
@@ -40,7 +36,6 @@ export interface Config {
   };
   system_prompt?: string;
   allowExecute?: boolean;
-  mcp?: MCPConfig;
   mcpServers?: {
     [key: string]: MCPServerConfig;
   };
@@ -370,7 +365,6 @@ function validateConfig(config: unknown): Config {
     providers,
     system_prompt: (cfg.system_prompt as string) || DEFAULT_SYSTEM_PROMPT,
     allowExecute: typeof cfg.allowExecute === 'boolean' ? cfg.allowExecute : undefined,
-    mcp: cfg.mcp as Config['mcp'],
     mcpServers: cfg.mcpServers as Config['mcpServers'],
   };
 

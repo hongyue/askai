@@ -31,17 +31,15 @@
       "models": ["gpt-4.1-mini", "gpt-4.1"]
     }
   },
-  "mcp": {
-    "autoExecute": false
-  },
   "mcpServers": {
     "filesystem": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"],
-      "autoExecute": true
+      "autoConnect": false
     },
     "web-search": {
-      "url": "http://localhost:3000/mcp"
+      "url": "http://localhost:3000/mcp",
+      "autoConnect": true
     }
   }
 }

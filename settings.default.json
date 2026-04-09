@@ -50,9 +50,6 @@
       "model": "llama3"
     }
   },
-  "mcp": {
-    "autoExecute": false
-  },
   "mcpServers": {
   }
 }

@@ -65,10 +65,10 @@ askai --execute off how do I list files
 askai --execute on how do I list files
 
 # Disable global MCP usage
-askai --mcp off what is 2+2
+askai --no-mcp what is 2+2
 
 # Enable global MCP usage
-askai --mcp on what is 2+2
+askai what is 2+2
 
 # Use custom config
 askai -c ./my-settings.json hello
@@ -104,22 +104,18 @@ askai supports the Model Context Protocol (MCP) for extended tool capabilities.
 - **stdio**: Run MCP servers as subprocesses
 - **Streamable HTTP**: Connect to remote MCP servers
 
-### Tool Execution
+### Command Execution
 
-Tools can be configured to:
-- **Auto-execute**: Run without confirmation
-- **User approval**: Prompt before execution
+Command execution is controlled globally through `allowExecute`.
 
 ```json
 {
-  "mcp": {
-    "autoExecute": false
-  },
+  "allowExecute": true,
   "mcpServers": {
     "server-name": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-name"],
-      "autoExecute": true
+      "autoConnect": false
     }
   }
 }

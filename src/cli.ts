@@ -15,8 +15,8 @@ program
   .option('-p, --provider <id>', 'Override provider id')
   .option('-m, --model <name>', 'Override the selected provider model')
   .option('-c, --config <path>', 'Config file path')
-  .option('-e, --execute <mode>', 'Set shell command execution: on or off')
-  .option('-x, --mcp <mode>', 'Enable / disable MCP servers: on or off')
+  .option('-e, --execute <mode>', 'Enable automatic command execution: on or off')
+  .option('--no-mcp', 'Disable MCP for this run')
   .action(async (question: string[] | undefined, options) => {
     const questionText = question && question.length > 0 ? question.join(' ') : undefined;
 
@@ -32,16 +32,7 @@ program
           throw new Error('Invalid value for --execute. Use "on" or "off".');
         }
       }
-      let mcpEnabled = true;
-      if (options.mcp !== undefined) {
-        if (options.mcp === 'on') {
-          mcpEnabled = true;
-        } else if (options.mcp === 'off') {
-          mcpEnabled = false;
-        } else {
-          throw new Error('Invalid value for --mcp. Use "on" or "off".');
-        }
-      }
+      const mcpEnabled = options.mcp !== false;
       if (questionText) {
         await runOneShotApp({
           providerName: options.provider,

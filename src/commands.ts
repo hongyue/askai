@@ -1,6 +1,5 @@
 export interface SessionState {
   allowExecute: boolean;
-  mcpEnabled: boolean;
 }
 
 export interface Command {
@@ -9,10 +8,9 @@ export interface Command {
   action: (args: string[]) => Promise<string | void> | string | void;
 }
 
-export function createInitialState(allowExecute: boolean, mcpEnabled: boolean): SessionState {
+export function createInitialState(allowExecute: boolean): SessionState {
   return {
     allowExecute,
-    mcpEnabled,
   };
 }
 
@@ -38,8 +36,8 @@ export function createCommands(
       action: (args) => onModelCommand?.(args),
     },
     {
-      name: 'shell-execute',
-      description: 'toggle shell command execution',
+      name: 'command-execute',
+      description: 'toggle automatic command execution',
       action: () => {
         state.allowExecute = !state.allowExecute;
         const status = state.allowExecute ? 'enabled' : 'disabled';
