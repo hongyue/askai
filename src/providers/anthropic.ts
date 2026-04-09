@@ -1,11 +1,23 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { Beta } from '@anthropic-ai/sdk/resources/index';
 import { ResolvedProviderConfig } from '../config';
-import { ChatOptions, Message, StreamChunk, Provider, ToolCall } from './base';
+import { ChatOptions, Message, StreamChunk, Provider, ToolCall, TokenUsage } from './base';
 import { AnthropicTool } from '../mcp/tools';
 
 type AnthropicToolsMessageParam = Beta.Tools.ToolsBetaMessageParam;
 type AnthropicToolUseBlock = Beta.Tools.ToolUseBlock;
+
+function mapAnthropicUsage(usage?: { input_tokens: number; output_tokens: number } | null): TokenUsage | undefined {
+  if (!usage) {
+    return undefined;
+  }
+
+  return {
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    totalTokens: usage.input_tokens + usage.output_tokens,
+  };
+}
 
 export class AnthropicProvider implements Provider {
   readonly name: string;
@@ -49,16 +61,28 @@ export class AnthropicProvider implements Provider {
       const stream = this.client.messages.stream(params, {
         signal: options?.signal,
       });
+      let usage: TokenUsage | undefined;
 
       for await (const event of stream) {
+        if (event.type === 'message_start') {
+          usage = mapAnthropicUsage(event.message.usage);
+        }
+
         if (event.type === 'content_block_delta') {
           if (event.delta.type === 'text_delta') {
             yield { content: event.delta.text, done: false };
           }
         }
 
+        if (event.type === 'message_delta') {
+          usage = mapAnthropicUsage({
+            input_tokens: usage?.inputTokens ?? 0,
+            output_tokens: event.usage.output_tokens,
+          });
+        }
+
         if (event.type === 'message_stop') {
-          yield { content: '', done: true };
+          yield { content: '', done: true, usage };
           return;
         }
       }
@@ -135,6 +159,7 @@ export class AnthropicProvider implements Provider {
       const result: Message = {
         role: 'assistant',
         content: '',
+        usage: mapAnthropicUsage(response.usage),
       };
 
       const toolCalls: ToolCall[] = [];

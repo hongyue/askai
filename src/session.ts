@@ -2,7 +2,7 @@ import { Database } from 'bun:sqlite';
 import { join } from 'path';
 import { homedir } from 'os';
 import { mkdirSync } from 'fs';
-import type { Message, ToolCall } from './providers/base';
+import type { Message, ToolCall, TokenUsage } from './providers/base';
 
 const DB_DIR = join(homedir(), '.askai');
 const DB_PATH = join(DB_DIR, 'sessions.db');
@@ -27,6 +27,10 @@ function migrate(database: Database): void {
       title TEXT NOT NULL,
       provider TEXT NOT NULL,
       model TEXT NOT NULL,
+      prompt_tokens INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      last_token_speed REAL,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -42,6 +46,17 @@ function migrate(database: Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
   `);
+  ensureSessionColumn(database, 'prompt_tokens', 'INTEGER NOT NULL DEFAULT 0');
+  ensureSessionColumn(database, 'completion_tokens', 'INTEGER NOT NULL DEFAULT 0');
+  ensureSessionColumn(database, 'total_tokens', 'INTEGER NOT NULL DEFAULT 0');
+  ensureSessionColumn(database, 'last_token_speed', 'REAL');
+}
+
+function ensureSessionColumn(database: Database, name: string, definition: string): void {
+  const columns = database.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
+  if (!columns.some(column => column.name === name)) {
+    database.exec(`ALTER TABLE sessions ADD COLUMN ${name} ${definition}`);
+  }
 }
 
 function generateId(): string {
@@ -58,6 +73,10 @@ export interface SessionSummary {
   title: string;
   provider: string;
   model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  last_token_speed: number | null;
   created_at: number;
   updated_at: number;
   message_count: number;
@@ -68,6 +87,10 @@ export interface SessionStorage {
   title: string;
   provider: string;
   model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  last_token_speed: number | null;
 }
 
 export function createSession(title: string, provider: string, model: string): SessionStorage {
@@ -77,12 +100,23 @@ export function createSession(title: string, provider: string, model: string): S
   database.prepare(
     'INSERT INTO sessions (id, title, provider, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(id, title, provider, model, now, now);
-  return { id, title, provider, model };
+  return {
+    id,
+    title,
+    provider,
+    model,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    last_token_speed: null,
+  };
 }
 
 export function getSession(id: string): SessionStorage | null {
   const database = getDatabase();
-  const row = database.prepare('SELECT id, title, provider, model FROM sessions WHERE id = ?').get(id) as SessionStorage | undefined;
+  const row = database.prepare(
+    'SELECT id, title, provider, model, prompt_tokens, completion_tokens, total_tokens, last_token_speed FROM sessions WHERE id = ?'
+  ).get(id) as SessionStorage | undefined;
   return row || null;
 }
 
@@ -135,7 +169,7 @@ export function getMessages(sessionId: string): Message[] {
 export function listSessions(limit = 50): SessionSummary[] {
   const database = getDatabase();
   return database.prepare(`
-    SELECT s.id, s.title, s.provider, s.model, s.created_at, s.updated_at,
+    SELECT s.id, s.title, s.provider, s.model, s.prompt_tokens, s.completion_tokens, s.total_tokens, s.last_token_speed, s.created_at, s.updated_at,
       COUNT(CASE WHEN m.role != 'system' THEN 1 END) as message_count
     FROM sessions s
     LEFT JOIN messages m ON m.session_id = s.id
@@ -149,6 +183,32 @@ export function listSessions(limit = 50): SessionSummary[] {
 export function renameSession(id: string, title: string): void {
   const database = getDatabase();
   database.prepare('UPDATE sessions SET title = ? WHERE id = ?').run(title, id);
+}
+
+export function recordSessionUsage(sessionId: string, usage?: TokenUsage, tokenSpeed?: number): SessionStorage | null {
+  if (!usage && tokenSpeed === undefined) {
+    return getSession(sessionId);
+  }
+
+  const database = getDatabase();
+  const now = Date.now();
+  database.prepare(`
+    UPDATE sessions
+    SET prompt_tokens = prompt_tokens + ?,
+        completion_tokens = completion_tokens + ?,
+        total_tokens = total_tokens + ?,
+        last_token_speed = COALESCE(?, last_token_speed),
+        updated_at = ?
+    WHERE id = ?
+  `).run(
+    usage?.inputTokens ?? 0,
+    usage?.outputTokens ?? 0,
+    usage?.totalTokens ?? 0,
+    tokenSpeed ?? null,
+    now,
+    sessionId,
+  );
+  return getSession(sessionId);
 }
 
 export function deleteSession(id: string): void {

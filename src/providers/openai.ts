@@ -1,7 +1,19 @@
 import OpenAI from 'openai';
 import { ResolvedProviderConfig } from '../config';
-import { ChatOptions, Message, StreamChunk, Provider, ToolCall } from './base';
+import { ChatOptions, Message, StreamChunk, Provider, ToolCall, TokenUsage } from './base';
 import { OpenAITool } from '../mcp/tools';
+
+function mapOpenAIUsage(usage?: OpenAI.CompletionUsage | null): TokenUsage | undefined {
+  if (!usage) {
+    return undefined;
+  }
+
+  return {
+    inputTokens: usage.prompt_tokens,
+    outputTokens: usage.completion_tokens,
+    totalTokens: usage.total_tokens,
+  };
+}
 
 export class OpenAIProvider implements Provider {
   readonly name: string;
@@ -44,6 +56,7 @@ export class OpenAIProvider implements Provider {
           return msg;
         }),
         stream: true,
+        stream_options: { include_usage: true },
       };
 
       if (tools && tools.length > 0) {
@@ -55,10 +68,16 @@ export class OpenAIProvider implements Provider {
       });
       
       let toolCalls: ToolCall[] = [];
+      let streamFinished = false;
       
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta;
-        const done = chunk.choices[0]?.finish_reason !== null;
+        const finishReason = chunk.choices[0]?.finish_reason;
+        const usage = mapOpenAIUsage(chunk.usage);
+
+        if (finishReason !== null && finishReason !== undefined) {
+          streamFinished = true;
+        }
         
         // Handle content
         const content = delta?.content || '';
@@ -88,15 +107,27 @@ export class OpenAIProvider implements Provider {
           }
         }
         
-        yield { 
-          content, 
-          done,
-          tool_calls: toolCalls.length > 0 && done ? toolCalls : undefined,
-        };
-        
+        const done = Boolean(usage) || (streamFinished && chunk.choices.length === 0);
+        if (content || done) {
+          yield {
+            content,
+            done,
+            tool_calls: toolCalls.length > 0 && done ? toolCalls : undefined,
+            usage,
+          };
+        }
+
         if (done) {
           return;
         }
+      }
+
+      if (streamFinished) {
+        yield {
+          content: '',
+          done: true,
+          tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+        };
       }
     } catch (error) {
       if (error instanceof Error) {
@@ -144,6 +175,7 @@ export class OpenAIProvider implements Provider {
       const result: Message = {
         role: 'assistant',
         content: choice?.message?.content || '',
+        usage: mapOpenAIUsage(response.usage),
       };
 
       if (choice?.message?.tool_calls && choice.message.tool_calls.length > 0) {

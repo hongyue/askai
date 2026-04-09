@@ -1,17 +1,26 @@
 import { ResolvedProviderConfig } from '../config';
 import { OpenAITool, AnthropicTool } from '../mcp/tools';
 
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 export interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
+  usage?: TokenUsage;
+  tokenSpeed?: number;
 }
 
 export interface StreamChunk {
   content: string;
   done: boolean;
   tool_calls?: ToolCall[];
+  usage?: TokenUsage;
 }
 
 export interface ToolCall {

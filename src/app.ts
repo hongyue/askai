@@ -28,7 +28,7 @@ import {
 } from './config';
 import { MCPManager, MCPServerState } from './mcp';
 import { createInitialState, createCommands, Command } from './commands';
-import { ChatOptions, Message, ToolCall } from './providers/base';
+import { ChatOptions, Message, ToolCall, TokenUsage } from './providers/base';
 import { createProviderFromConfig } from './providers';
 import { fetchAvailableModels } from './providers/models';
 import { MCPTool } from './mcp/client';
@@ -52,6 +52,7 @@ import {
   renameSession,
   deleteSession,
   deleteEmptySessions,
+  recordSessionUsage,
   type SessionStorage,
   type SessionSummary,
 } from './session';
@@ -174,6 +175,49 @@ const shiftEnterSequences = new Set([
   '\x1b[27;2;13~',
   '\x1b[13;2~',
 ]);
+
+function createEmptySession(provider: string, model: string): SessionStorage {
+  return {
+    id: '',
+    title: 'New Session',
+    provider,
+    model,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    last_token_speed: null,
+  };
+}
+
+function formatNumberCompact(value: number): string {
+  if (value >= 1000000) {
+    return `${(value / 1000000).toFixed(value >= 10000000 ? 0 : 1)}M`;
+  }
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k`;
+  }
+  return `${Math.round(value)}`;
+}
+
+function formatTokenSpeed(value: number | null): string {
+  if (value === null || !Number.isFinite(value) || value <= 0) {
+    return '-- tok/s';
+  }
+  return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} tok/s`;
+}
+
+function formatStatusStats(session: SessionStorage): string {
+  return `${formatTokenSpeed(session.last_token_speed)}  ${formatNumberCompact(session.total_tokens)} tok`;
+}
+
+function calculateTokenSpeed(usage: TokenUsage | undefined, startedAt: number, finishedAt = Date.now()): number | undefined {
+  if (!usage || usage.outputTokens <= 0) {
+    return undefined;
+  }
+
+  const elapsedMs = Math.max(1, finishedAt - startedAt);
+  return usage.outputTokens / (elapsedMs / 1000);
+}
 
 // Helper functions for matching keyboard sequences (supports both traditional and Kitty protocol)
 function isEnter(sequence: string): boolean {
@@ -399,12 +443,13 @@ async function initializeRuntime(options: RunAppOptions): Promise<{
 
   const messages: Message[] = [{ role: 'system', content: systemPrompt }];
 
-  let session: SessionStorage = { id: '', title: 'New Session', provider: resolvedProvider.id, model: resolvedProvider.model };
+  let session: SessionStorage = createEmptySession(resolvedProvider.id, resolvedProvider.model);
 
   const startNewSession = (): SessionStorage => {
     messages.length = 0;
     messages.push({ role: 'system', content: systemPrompt });
-    return { id: '', title: 'New Session', provider: resolvedProvider.id, model: resolvedProvider.model };
+    session = createEmptySession(resolvedProvider.id, resolvedProvider.model);
+    return session;
   };
 
   const loadPersistedSession = (id: string): void => {
@@ -573,13 +618,18 @@ async function getAssistantResponse(
   }
 
   let fullResponse = '';
+  let usage: TokenUsage | undefined;
   for await (const chunk of provider.chat(messages, mcpEnabled ? providerTools : [], options)) {
     if (chunk.content) fullResponse += chunk.content;
+    if (chunk.usage) {
+      usage = chunk.usage;
+    }
     if (chunk.done) {
       return {
         role: 'assistant',
         content: fullResponse,
         tool_calls: chunk.tool_calls,
+        usage,
       };
     }
   }
@@ -587,6 +637,7 @@ async function getAssistantResponse(
   return {
     role: 'assistant',
     content: fullResponse,
+    usage,
   };
 }
 
@@ -631,7 +682,7 @@ export async function runOneShotApp(options: RunAppOptions & { question: string 
 
   // One-shot always has a question - create session immediately
   const title = autoGenerateTitle(options.question);
-  const session = createSession(title, runtime.getResolvedProvider().id, runtime.getResolvedProvider().model);
+  let session = createSession(title, runtime.getResolvedProvider().id, runtime.getResolvedProvider().model);
   addMessage(session.id, 'system', runtime.systemPrompt);
 
   messages.push({ role: 'user', content: options.question });
@@ -640,7 +691,18 @@ export async function runOneShotApp(options: RunAppOptions & { question: string 
   try {
     while (true) {
       console.log(`${oneShotFeedbackColor}${getRandomOneShotFeedbackPrompt()}${ansiReset}`);
+      const responseStartedAt = Date.now();
       const response = await getAssistantResponse(provider, messages, state.mcpEnabled, providerTools);
+      const tokenSpeed = calculateTokenSpeed(response.usage, responseStartedAt);
+      if (session.id) {
+        const updatedSession = recordSessionUsage(session.id, response.usage, tokenSpeed);
+        if (updatedSession) {
+          session = updatedSession;
+        }
+      }
+      if (tokenSpeed !== undefined) {
+        response.tokenSpeed = tokenSpeed;
+      }
 
       if (response.content) {
         console.log(response.content);
@@ -756,6 +818,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
           title: currentSession.title,
           provider: currentSession.provider,
           model: currentSession.model,
+          prompt_tokens: currentSession.prompt_tokens,
+          completion_tokens: currentSession.completion_tokens,
+          total_tokens: currentSession.total_tokens,
+          last_token_speed: currentSession.last_token_speed,
           created_at: Date.now(),
           updated_at: Date.now(),
           message_count: messages.filter(m => m.role !== 'system').length,
@@ -979,6 +1045,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
             }
             closeSessionsModal();
             renderHeader();
+            renderStatusBar();
             root.requestRender();
           }
         }
@@ -1019,6 +1086,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
                 if (nodeId) chatNode.remove(nodeId);
               }
               renderHeader();
+              renderStatusBar();
             }
             sessionsList = listSessions();
             sessionsSelectedIndex = Math.min(sessionsSelectedIndex, Math.max(0, sessionsList.length - 1));
@@ -1201,6 +1269,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     width: '100%',
     height: 1,
     flexShrink: 0,
+    flexDirection: 'row',
     backgroundColor: '#1f1f1f',
     marginTop: 1,
     paddingLeft: 0,
@@ -1211,7 +1280,19 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     content: stringToStyledText(' Ready'),
     fg: '#7a7a7a',
   });
+  const statusBarSpacer = Box({
+    id: 'status-bar-spacer',
+    flexGrow: 1,
+    height: 1,
+  });
+  const statusBarStats = Text({
+    id: 'status-bar-stats',
+    content: stringToStyledText(formatStatusStats(currentSession)),
+    fg: '#7a7a7a',
+  });
   statusBar.add(statusBarText);
+  statusBar.add(statusBarSpacer);
+  statusBar.add(statusBarStats);
 
   const approvalDialog = Box({
     id: 'approval-dialog',
@@ -1437,6 +1518,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const liveCmdListBox = renderer.root.findDescendantById('cmd-list-box') as MutableBoxNode | undefined;
   const liveCmdListText = renderer.root.findDescendantById('command-palette') as MutableTextNode | undefined;
   const liveStatusBarText = renderer.root.findDescendantById('status-bar-text') as MutableTextNode | undefined;
+  const liveStatusBarStats = renderer.root.findDescendantById('status-bar-stats') as MutableTextNode | undefined;
   const liveHeaderText = renderer.root.findDescendantById('header-text') as MutableTextNode | undefined;
   const liveInput = renderer.root.findDescendantById('main-input') as MutableInputNode | undefined;
   const liveChat = renderer.root.findDescendantById('chat-box') as MutableBoxNode | undefined;
@@ -1456,13 +1538,14 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const liveSessionsModal = renderer.root.findDescendantById('sessions-modal') as MutableBoxNode | undefined;
   const liveSessionsModalText = renderer.root.findDescendantById('sessions-modal-text') as MutableTextNode | undefined;
 
-  if (!liveCmdListBox || !liveCmdListText || !liveStatusBarText || !liveHeaderText || !liveInput || !liveChat || !liveApprovalDialog || !liveApprovalDialogText || !liveMcpModal || !liveMcpModalText || !liveMcpDetailsModal || !liveMcpDetailsModalText || !liveProviderModal || !liveProviderModalText || !liveModelModal || !liveModelModalTitleText || !liveModelModalProvidersText || !liveModelModalFilterText || !liveModelModalModelsText || !liveSessionsModal || !liveSessionsModalText) {
+  if (!liveCmdListBox || !liveCmdListText || !liveStatusBarText || !liveStatusBarStats || !liveHeaderText || !liveInput || !liveChat || !liveApprovalDialog || !liveApprovalDialogText || !liveMcpModal || !liveMcpModalText || !liveMcpDetailsModal || !liveMcpDetailsModalText || !liveProviderModal || !liveProviderModalText || !liveModelModal || !liveModelModalTitleText || !liveModelModalProvidersText || !liveModelModalFilterText || !liveModelModalModelsText || !liveSessionsModal || !liveSessionsModalText) {
     throw new Error('Failed to initialize TUI render tree');
   }
 
   const cmdListBoxNode = liveCmdListBox;
   const cmdListTextNode = liveCmdListText;
   const statusBarTextNode = liveStatusBarText;
+  const statusBarStatsNode = liveStatusBarStats;
   const headerTextNode = liveHeaderText;
   const inputNode = liveInput;
   const chatNode = liveChat;
@@ -1551,6 +1634,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   }
 
   function renderStatusBar(): void {
+    statusBarStatsNode.content = new StyledText([
+      fg('#7a7a7a')(formatStatusStats(currentSession)),
+    ]);
+
     if (activeShellCommand) {
       const spinner = statusSpinnerFrames[statusSpinnerIndex % statusSpinnerFrames.length];
       statusBarTextNode.content = new StyledText([
@@ -1884,6 +1971,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         title: currentSession.title,
         provider: currentSession.provider,
         model: currentSession.model,
+        prompt_tokens: currentSession.prompt_tokens,
+        completion_tokens: currentSession.completion_tokens,
+        total_tokens: currentSession.total_tokens,
+        last_token_speed: currentSession.last_token_speed,
         created_at: Date.now(),
         updated_at: Date.now(),
         message_count: messages.filter(m => m.role !== 'system').length,
@@ -3690,10 +3781,12 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     try {
       while (true) {
         ensureActiveTurn(turnId);
+        const responseStartedAt = Date.now();
         const response = await getAssistantResponse(provider, messages, state.mcpEnabled, providerTools, {
           signal: controller.signal,
         });
         ensureActiveTurn(turnId);
+        const tokenSpeed = calculateTokenSpeed(response.usage, responseStartedAt);
         removeLastMsg();
 
         if (response.content) {
@@ -3704,6 +3797,16 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
         messages.push(response);
         addMessage(currentSession.id, 'assistant', response.content, response.tool_calls);
+        if (currentSession.id) {
+          const updatedSession = recordSessionUsage(currentSession.id, response.usage, tokenSpeed);
+          if (updatedSession) {
+            currentSession = updatedSession;
+          }
+        }
+        if (tokenSpeed !== undefined) {
+          response.tokenSpeed = tokenSpeed;
+        }
+        renderStatusBar();
 
         if (response.tool_calls && response.tool_calls.length > 0) {
           await handleToolCalls(response.tool_calls, turnId);
