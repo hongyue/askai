@@ -1,14 +1,19 @@
 import { Config, MCPServerConfig } from '../config';
 import { MCPClientWrapper, MCPTool, MCPToolResult } from './client';
 
+export type MCPServerLifecycle = 'disconnected' | 'connecting' | 'connected' | 'disconnecting' | 'refreshing' | 'error';
+
 export interface MCPServerState {
   name: string;
   connected: boolean;
   autoConnect: boolean;
+  lifecycle: MCPServerLifecycle;
+  operationStartedAt?: number;
   toolCount: number;
   transport: 'stdio' | 'http' | 'unknown';
   target: string;
   tools: MCPTool[];
+  recentStderr: string[];
   lastError?: string;
 }
 
@@ -18,11 +23,14 @@ export class MCPManager {
   private serverTools: Map<string, MCPTool[]> = new Map();
   private toolToServer: Map<string, string> = new Map();
   private lastErrors: Map<string, string> = new Map();
+  private lifecycleStates: Map<string, MCPServerLifecycle> = new Map();
+  private operationStartedAt: Map<string, number> = new Map();
 
   constructor(config: Config) {
     if (config.mcpServers) {
       for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
         this.serverConfigs.set(name, serverConfig);
+        this.lifecycleStates.set(name, 'disconnected');
       }
     }
   }
@@ -60,12 +68,15 @@ export class MCPManager {
     }
 
     const client = new MCPClientWrapper(name);
+    this.setLifecycle(name, 'connecting');
     try {
       await client.connect(config);
       this.servers.set(name, client);
       this.lastErrors.delete(name);
+      this.setLifecycle(name, 'connected');
     } catch (error) {
       this.lastErrors.set(name, error instanceof Error ? error.message : 'Unknown error');
+      this.setLifecycle(name, 'error');
       throw error;
     }
   }
@@ -73,6 +84,7 @@ export class MCPManager {
   async disconnectServer(name: string): Promise<void> {
     const client = this.servers.get(name);
     if (client) {
+      this.setLifecycle(name, 'disconnecting');
       try {
         await client.disconnect();
       } finally {
@@ -86,6 +98,7 @@ export class MCPManager {
         this.toolToServer.delete(toolName);
       }
     }
+    this.setLifecycle(name, 'disconnected');
   }
 
   async reconnectServer(name: string): Promise<void> {
@@ -109,6 +122,7 @@ export class MCPManager {
         continue;
       }
 
+      this.setLifecycle(serverName, 'refreshing');
       try {
         const tools = await client.listTools();
         this.serverTools.set(serverName, tools);
@@ -116,9 +130,11 @@ export class MCPManager {
           this.toolToServer.set(tool.name, serverName);
         }
         this.lastErrors.delete(serverName);
+        this.setLifecycle(serverName, 'connected');
       } catch (error) {
         this.serverTools.set(serverName, []);
         this.lastErrors.set(serverName, error instanceof Error ? error.message : 'Unknown error');
+        this.setLifecycle(serverName, 'error');
       }
     }
   }
@@ -137,10 +153,13 @@ export class MCPManager {
         name,
         connected: client?.connected ?? false,
         autoConnect: config.autoConnect ?? false,
+        lifecycle: this.lifecycleStates.get(name) || (client?.connected ? 'connected' : 'disconnected'),
+        operationStartedAt: this.operationStartedAt.get(name),
         toolCount: tools.length,
         transport: config.url ? 'http' : config.command ? 'stdio' : 'unknown',
         target: config.url || [config.command, ...(config.args || [])].filter(Boolean).join(' '),
         tools,
+        recentStderr: client?.recentStderr || [],
         lastError: this.lastErrors.get(name),
       };
     });
@@ -166,5 +185,14 @@ export class MCPManager {
   }
   getServerForTool(toolName: string): string | undefined {
     return this.toolToServer.get(toolName);
+  }
+
+  private setLifecycle(name: string, lifecycle: MCPServerLifecycle): void {
+    this.lifecycleStates.set(name, lifecycle);
+    if (lifecycle === 'connected' || lifecycle === 'disconnected' || lifecycle === 'error') {
+      this.operationStartedAt.delete(name);
+      return;
+    }
+    this.operationStartedAt.set(name, Date.now());
   }
 }

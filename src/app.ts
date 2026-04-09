@@ -166,6 +166,7 @@ const oneShotFeedbackColor = '\x1b[38;5;45m';
 const ansiReset = '\x1b[0m';
 const mcpDetailsModalHeight = 20;
 const mcpDetailsVisibleLineCount = 15;
+const mcpDetailsFooterLineCount = 3;
 const sessionsVisibleLineCount = 15;
 const statusSpinnerFrames = ['|', '/', '-', '\\'] as const;
 const enableModifyOtherKeys = '\x1b[>4;2m';
@@ -208,6 +209,13 @@ function formatTokenSpeed(value: number | null): string {
 
 function formatStatusStats(session: SessionStorage): string {
   return `${formatTokenSpeed(session.last_token_speed)}  ${formatNumberCompact(session.total_tokens)} tok`;
+}
+
+function formatElapsedSeconds(startedAt?: number): string {
+  if (!startedAt) {
+    return '';
+  }
+  return `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
 }
 
 function calculateTokenSpeed(usage: TokenUsage | undefined, startedAt: number, finishedAt = Date.now()): number | undefined {
@@ -754,6 +762,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   let mcpServerIndex = 0;
   let mcpDetailsScrollOffset = 0;
   let mcpFocus: 'server' = 'server';
+  let mcpLifecycleRefreshTimer: ReturnType<typeof setInterval> | null = null;
   let providerModalOpen = false;
   let providerModalProviderIndex = 0;
   let providerModalProviderScrollOffset = 0;
@@ -1350,7 +1359,13 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     content: stringToStyledText(''),
     fg: '#d8d8d8',
   });
+  const mcpDetailsModalFooterText = Text({
+    id: 'mcp-details-modal-footer-text',
+    content: stringToStyledText(''),
+    fg: '#8f8f8f',
+  });
   mcpDetailsModal.add(mcpDetailsModalText);
+  mcpDetailsModal.add(mcpDetailsModalFooterText);
 
   const providerModal = Box({
     id: 'provider-modal',
@@ -1535,6 +1550,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const liveMcpModalText = renderer.root.findDescendantById('mcp-modal-text') as MutableTextNode | undefined;
   const liveMcpDetailsModal = renderer.root.findDescendantById('mcp-details-modal') as MutableBoxNode | undefined;
   const liveMcpDetailsModalText = renderer.root.findDescendantById('mcp-details-modal-text') as MutableTextNode | undefined;
+  const liveMcpDetailsModalFooterText = renderer.root.findDescendantById('mcp-details-modal-footer-text') as MutableTextNode | undefined;
   const liveProviderModal = renderer.root.findDescendantById('provider-modal') as MutableBoxNode | undefined;
   const liveProviderModalText = renderer.root.findDescendantById('provider-modal-text') as MutableTextNode | undefined;
   const liveModelModal = renderer.root.findDescendantById('model-modal') as MutableBoxNode | undefined;
@@ -1545,7 +1561,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const liveSessionsModal = renderer.root.findDescendantById('sessions-modal') as MutableBoxNode | undefined;
   const liveSessionsModalText = renderer.root.findDescendantById('sessions-modal-text') as MutableTextNode | undefined;
 
-  if (!liveCmdListBox || !liveCmdListText || !liveStatusBarText || !liveStatusBarStats || !liveHeaderText || !liveInput || !liveChat || !liveApprovalDialog || !liveApprovalDialogText || !liveMcpModal || !liveMcpModalText || !liveMcpDetailsModal || !liveMcpDetailsModalText || !liveProviderModal || !liveProviderModalText || !liveModelModal || !liveModelModalTitleText || !liveModelModalProvidersText || !liveModelModalFilterText || !liveModelModalModelsText || !liveSessionsModal || !liveSessionsModalText) {
+  if (!liveCmdListBox || !liveCmdListText || !liveStatusBarText || !liveStatusBarStats || !liveHeaderText || !liveInput || !liveChat || !liveApprovalDialog || !liveApprovalDialogText || !liveMcpModal || !liveMcpModalText || !liveMcpDetailsModal || !liveMcpDetailsModalText || !liveMcpDetailsModalFooterText || !liveProviderModal || !liveProviderModalText || !liveModelModal || !liveModelModalTitleText || !liveModelModalProvidersText || !liveModelModalFilterText || !liveModelModalModelsText || !liveSessionsModal || !liveSessionsModalText) {
     throw new Error('Failed to initialize TUI render tree');
   }
 
@@ -1562,6 +1578,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const mcpModalTextNode = liveMcpModalText;
   const mcpDetailsModalNode = liveMcpDetailsModal;
   const mcpDetailsModalTextNode = liveMcpDetailsModalText;
+  const mcpDetailsModalFooterTextNode = liveMcpDetailsModalFooterText;
   const providerModalNode = liveProviderModal;
   const providerModalTextNode = liveProviderModalText;
   const modelModalNode = liveModelModal;
@@ -3193,11 +3210,45 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     inputNode.focus();
   }
 
+  function hasActiveMcpLifecycle(states = runtime.getMcpServerStates()): boolean {
+    return states.some(state =>
+      state.lifecycle === 'connecting'
+      || state.lifecycle === 'disconnecting'
+      || state.lifecycle === 'refreshing'
+    );
+  }
+
+  function syncMcpLifecycleRefreshTimer(): void {
+    const shouldRun = (mcpModalOpen || mcpDetailsOpen) && hasActiveMcpLifecycle();
+    if (shouldRun) {
+      if (!mcpLifecycleRefreshTimer) {
+        mcpLifecycleRefreshTimer = setInterval(() => {
+          if (mcpModalOpen) {
+            renderMcpModal();
+          }
+          if (mcpDetailsOpen) {
+            renderMcpDetailsModal();
+          }
+          if (!(mcpModalOpen || mcpDetailsOpen) || !hasActiveMcpLifecycle()) {
+            syncMcpLifecycleRefreshTimer();
+          }
+        }, 120);
+      }
+      return;
+    }
+
+    if (mcpLifecycleRefreshTimer) {
+      clearInterval(mcpLifecycleRefreshTimer);
+      mcpLifecycleRefreshTimer = null;
+    }
+  }
+
   function closeMcpModal(): void {
     mcpModalOpen = false;
     closeMcpDetailsModal();
     mcpModalNode.visible = false;
     mcpModalTextNode.content = stringToStyledText('');
+    syncMcpLifecycleRefreshTimer();
     root.requestRender();
     inputNode.focus();
   }
@@ -3207,6 +3258,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     mcpDetailsScrollOffset = 0;
     mcpDetailsModalNode.visible = false;
     mcpDetailsModalTextNode.content = stringToStyledText('');
+    mcpDetailsModalFooterTextNode.content = stringToStyledText('');
+    syncMcpLifecycleRefreshTimer();
     root.requestRender();
     if (!mcpModalOpen) {
       inputNode.focus();
@@ -3229,11 +3282,16 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
     mcpServerIndex = Math.max(0, Math.min(mcpServerIndex, states.length - 1));
     const selectedState = states[mcpServerIndex];
+    const selectedLifecycle = selectedState.lifecycle === 'error' && selectedState.lastError
+      ? 'failed'
+      : selectedState.lifecycle;
+    const selectedElapsed = formatElapsedSeconds(selectedState.operationStartedAt);
     const summaryLines = [
       `Selected: ${selectedState.name}`,
-      `${selectedState.transport} • ${selectedState.connected ? 'connected' : 'disconnected'}`,
+      `${selectedState.transport} • ${selectedLifecycle}${selectedElapsed ? ` (${selectedElapsed})` : ''}`,
       `Target: ${selectedState.target || 'n/a'}`,
       `Connect on startup: ${selectedState.autoConnect ? 'yes' : 'no'}`,
+      `Tools: ${selectedState.toolCount}`,
       selectedState.lastError ? `Last error: ${selectedState.lastError}` : '',
       '',
     ].filter(Boolean).join('\n');
@@ -3241,8 +3299,9 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     const header = stringToStyledText('MCP Servers\n\n');
     const serverChunks = states.flatMap((server, index) => {
       const marker = index === mcpServerIndex ? '>' : ' ';
-      const connected = server.connected ? 'connected   ' : 'disconnected';
-      const line = `${marker} ${server.name.padEnd(16)} ${connected} ${String(server.toolCount).padStart(2)} tools`;
+      const lifecycle = server.lifecycle === 'error' && server.lastError ? 'failed' : server.lifecycle;
+      const paddedStatus = lifecycle.length >= 13 ? lifecycle.slice(0, 13) : lifecycle.padEnd(13);
+      const line = `${marker} ${server.name.padEnd(16)} ${paddedStatus} ${String(server.toolCount).padStart(2)} tools`;
       const isFocused = mcpFocus === 'server' && index === mcpServerIndex;
       const chunk = isFocused ? fg('#00d4ff')(line) : fg('#a8a8a8')(line);
       return index < states.length - 1 ? [chunk, fg('#a8a8a8')('\n')] : [chunk];
@@ -3260,6 +3319,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       ...serverChunks,
       ...rest.chunks,
     ]);
+    syncMcpLifecycleRefreshTimer();
     mcpModalNode.visible = true;
     if (inputNode.blur) {
       inputNode.blur();
@@ -3281,18 +3341,17 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
 
     const allLines = getMcpDetailsContentLines(selectedState);
-    const visibleLineCount = mcpDetailsVisibleLineCount;
+    const visibleLineCount = Math.max(1, mcpDetailsVisibleLineCount - mcpDetailsFooterLineCount);
     const maxOffset = Math.max(0, allLines.length - visibleLineCount);
     mcpDetailsScrollOffset = Math.max(0, Math.min(mcpDetailsScrollOffset, maxOffset));
     const visibleLines = allLines.slice(mcpDetailsScrollOffset, mcpDetailsScrollOffset + visibleLineCount);
-    const content = [
-      ...visibleLines,
+    mcpDetailsModalTextNode.content = stringToStyledText(visibleLines.join('\n'));
+    mcpDetailsModalFooterTextNode.content = stringToStyledText([
       '',
       `Scroll ${mcpDetailsScrollOffset + 1}-${Math.min(mcpDetailsScrollOffset + visibleLines.length, allLines.length)} / ${allLines.length}`,
       '↑/↓ scroll   PgUp/PgDn jump   Esc/q close',
-    ].join('\n');
-
-    mcpDetailsModalTextNode.content = stringToStyledText(content);
+    ].join('\n'));
+    syncMcpLifecycleRefreshTimer();
     mcpDetailsModalNode.visible = true;
     if (inputNode.blur) {
       inputNode.blur();
@@ -3304,6 +3363,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     mcpDetailsOpen = true;
     mcpDetailsScrollOffset = 0;
     renderMcpDetailsModal();
+    syncMcpLifecycleRefreshTimer();
   }
 
   function getMcpDetailsContentLines(selectedState?: MCPServerState): string[] {
@@ -3363,6 +3423,11 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       '',
       'Provided Tools',
       ...toolLines,
+      '',
+      'Recent stderr',
+      ...(selectedState.recentStderr.length > 0
+        ? selectedState.recentStderr.flatMap(line => wrapLines(line, 58, '  '))
+        : ['- No recent stderr output']),
     ];
   }
 
@@ -3374,7 +3439,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     const states = runtime.getMcpServerStates();
     const selectedState = states[mcpServerIndex];
     const allLines = getMcpDetailsContentLines(selectedState);
-    const visibleLineCount = mcpDetailsVisibleLineCount;
+    const visibleLineCount = Math.max(1, mcpDetailsVisibleLineCount - mcpDetailsFooterLineCount);
     const maxOffset = Math.max(0, allLines.length - visibleLineCount);
     const delta = Math.max(1, event.scroll?.delta ?? 1);
 
@@ -3398,12 +3463,25 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     if (!selectedState || mcpFocus !== 'server') {
       return;
     }
+    if (selectedState.lifecycle === 'connecting' || selectedState.lifecycle === 'disconnecting' || selectedState.lifecycle === 'refreshing') {
+      return;
+    }
 
     try {
       if (selectedState.connected) {
-        await mcpManager.disconnectServer(selectedState.name);
+        const disconnectPromise = mcpManager.disconnectServer(selectedState.name);
+        renderMcpModal();
+        if (mcpDetailsOpen) {
+          renderMcpDetailsModal();
+        }
+        await disconnectPromise;
       } else {
-        await mcpManager.connectServer(selectedState.name);
+        const connectPromise = mcpManager.connectServer(selectedState.name);
+        renderMcpModal();
+        if (mcpDetailsOpen) {
+          renderMcpDetailsModal();
+        }
+        await connectPromise;
       }
       await runtime.refreshProviderTools();
       providerTools = runtime.getProviderTools();
@@ -4146,6 +4224,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   const sigintHandler = async () => {
     if (await handleInterruptSignal()) {
       return;
+    }
+    if (mcpLifecycleRefreshTimer) {
+      clearInterval(mcpLifecycleRefreshTimer);
+      mcpLifecycleRefreshTimer = null;
     }
     deleteEmptySessions();
     if (mcpManager) {

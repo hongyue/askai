@@ -4,6 +4,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { MCPServerConfig } from '../config';
 import { appVersion } from '../version';
 
+const ansiEscapePattern = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+const maxStderrLines = 100;
+
 export interface MCPTool {
   name: string;
   description: string;
@@ -25,6 +28,8 @@ export class MCPClientWrapper {
   private transport: StdioClientTransport | StreamableHTTPClientTransport | null = null;
   private serverName: string;
   private _connected = false;
+  private stderrBuffer = '';
+  private stderrLines: string[] = [];
 
   constructor(serverName: string) {
     this.serverName = serverName;
@@ -38,6 +43,10 @@ export class MCPClientWrapper {
     return this._connected;
   }
 
+  get recentStderr(): string[] {
+    return [...this.stderrLines];
+  }
+
   async connect(config: MCPServerConfig): Promise<void> {
     try {
       if (config.url) {
@@ -46,7 +55,9 @@ export class MCPClientWrapper {
         this.transport = new StdioClientTransport({
           command: config.command,
           args: config.args || [],
+          stderr: 'pipe',
         });
+        this.attachStderrListener(this.transport);
       } else {
         throw new Error('Either url or command must be specified');
       }
@@ -61,6 +72,7 @@ export class MCPClientWrapper {
 
   async disconnect(): Promise<void> {
     if (this.transport) {
+      this.flushStderrBuffer();
       await this.transport.close();
       this._connected = false;
       this.transport = null;
@@ -91,5 +103,45 @@ export class MCPClientWrapper {
       content: result.content as MCPToolResult['content'],
       isError: typeof result.isError === 'boolean' ? result.isError : undefined,
     };
+  }
+
+  private attachStderrListener(transport: StdioClientTransport): void {
+    const stderr = transport.stderr;
+    if (!stderr) {
+      return;
+    }
+
+    stderr.on('data', (chunk: string | Buffer) => {
+      this.consumeStderrChunk(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
+    });
+  }
+
+  private consumeStderrChunk(chunk: string): void {
+    this.stderrBuffer += chunk.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const parts = this.stderrBuffer.split('\n');
+    this.stderrBuffer = parts.pop() || '';
+
+    for (const part of parts) {
+      const line = part.replace(ansiEscapePattern, '').trim();
+      if (!line) {
+        continue;
+      }
+      this.stderrLines.push(line);
+    }
+
+    if (this.stderrLines.length > maxStderrLines) {
+      this.stderrLines.splice(0, this.stderrLines.length - maxStderrLines);
+    }
+  }
+
+  private flushStderrBuffer(): void {
+    const line = this.stderrBuffer.replace(ansiEscapePattern, '').trim();
+    if (line) {
+      this.stderrLines.push(line);
+      if (this.stderrLines.length > maxStderrLines) {
+        this.stderrLines.splice(0, this.stderrLines.length - maxStderrLines);
+      }
+    }
+    this.stderrBuffer = '';
   }
 }
