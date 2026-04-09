@@ -4,7 +4,9 @@ import {
   TextareaRenderable, fg, h, white, bgWhite, black,
   stringToStyledText,
   type KeyEvent,
-  BoxRenderable
+  BoxRenderable,
+  MarkdownRenderable,
+  SyntaxStyle
 } from "@opentui/core"
 import {
   findProviderByNormalizedId,
@@ -1043,8 +1045,8 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
             }
             for (const msg of messages) {
               if (msg.role === 'system') continue;
-              if (msg.role === 'user') addMsg(`> ${msg.content}`, '#00ff88');
-              else if (msg.role === 'assistant' && msg.content) addMsg(msg.content);
+              if (msg.role === 'user') addUserMsg(msg.content);
+              else if (msg.role === 'assistant' && msg.content) addMsg(msg.content, '#ffffff', true);
               else if (msg.role === 'tool') addMsg(`[tool] ${msg.content}`, '#888888');
             }
             closeSessionsModal();
@@ -1256,6 +1258,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   });
   root.add(chat);
   const chatNodeIds: string[] = [];
+  const markdownSyntaxStyle = SyntaxStyle.create();
 
   const cmdListBox = Box({
     id: 'cmd-list-box',
@@ -3524,11 +3527,47 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     return `${' '.repeat(padding)}${line}`;
   }
 
-  function addMsg(text: string, color = '#ffffff') {
+  function addMsg(text: string, color = '#ffffff', isMarkdown = false) {
     const nodeId = `chat-${chatNodeIds.length}-${Date.now()}`;
-    const node = Text({ id: nodeId, content: text, fg: color });
+    let node;
+    if (isMarkdown) {
+      node = h(MarkdownRenderable, {
+        id: nodeId,
+        content: text,
+        syntaxStyle: markdownSyntaxStyle,
+        fg: color,
+        conceal: true,
+      });
+    } else {
+      node = Text({ id: nodeId, content: text, fg: color });
+    }
     chatNodeIds.push(nodeId);
     chatNode.add(node);
+    root.requestRender();
+  }
+
+  function addUserMsg(text: string) {
+    const nodeId = `chat-${chatNodeIds.length}-${Date.now()}`;
+    const boxNode = Box({
+      id: nodeId,
+      width: '100%',
+      height: 'auto',
+      flexDirection: 'column',
+      backgroundColor: '#1f1f1f',
+      border: ['left'],
+      borderColor: '#ff9e3d',
+      customBorderChars: promptAccentBorderChars,
+      paddingY: 1,
+      marginY: 1,
+      paddingLeft: 1,
+    });
+    const styledContent = new StyledText([
+      fg('#00d4ff')('> '),
+      fg('#ffffff')(text),
+    ]);
+    boxNode.add(Text({ content: styledContent }));
+    chatNodeIds.push(nodeId);
+    chatNode.add(boxNode);
     root.requestRender();
   }
 
@@ -3857,7 +3896,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       controller,
       interrupted: false,
     };
-    addMsg(`> ${text}`, '#00ff88');
+    addUserMsg(text);
     addMsg('Thinking...', '#888888');
     renderStatusBar();
     messages.push({ role: 'user', content: text });
@@ -3890,9 +3929,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         removeLastMsg();
 
         if (response.content) {
-          for (const line of response.content.split('\n')) {
-            addMsg(line);
-          }
+          addMsg(response.content, '#ffffff', true);
         }
 
         messages.push(response);
@@ -3937,7 +3974,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
   }
 
   async function executeCommand(cmd: Command, args: string[] = [], rawInput?: string) {
-    addMsg(`> ${rawInput || `/${cmd.name}`}`, '#00ff88');
+    addUserMsg(rawInput || `/${cmd.name}`);
     if (cmd.name === 'exit' || cmd.name === 'quit') {
       deleteEmptySessions();
       if (mcpManager) await mcpManager.disconnectAll();
