@@ -266,6 +266,21 @@ function isBackspace(sequence: string): boolean {
   return sequence === '\x7f' || sequence === '\x1b[127u' || sequence === '\b';
 }
 
+// Ctrl+A - move cursor to line start
+function isCtrlA(sequence: string): boolean {
+  return sequence === '\x01' || sequence === '\x1b[1;5u' || sequence === '\x1b[97;5u';
+}
+
+// Ctrl+E - move cursor to line end
+function isCtrlE(sequence: string): boolean {
+  return sequence === '\x05' || sequence === '\x1b[5;5u' || sequence === '\x1b[101;5u';
+}
+
+// Ctrl+U - kill line from cursor to start
+function isCtrlU(sequence: string): boolean {
+  return sequence === '\x15' || sequence === '\x1b[21;5u' || sequence === '\x1b[117;5u';
+}
+
 // Helper to get character from sequence (handles both plain and Kitty protocol)
 function getChar(sequence: string): string | null {
   // Plain character
@@ -959,6 +974,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
             }
           }
           sessionsRenaming = null;
+          renderSessionsModal();
+          return true;
+        }
+        if (isCtrlA(sequence)) {
+          sessionsRenaming.cursorOffset = 0;
+          renderSessionsModal();
+          return true;
+        }
+        if (isCtrlE(sequence)) {
+          sessionsRenaming.cursorOffset = sessionsRenaming.value.length;
+          renderSessionsModal();
+          return true;
+        }
+        if (isCtrlU(sequence)) {
+          sessionsRenaming.value = sessionsRenaming.value.slice(sessionsRenaming.cursorOffset);
+          sessionsRenaming.cursorOffset = 0;
           renderSessionsModal();
           return true;
         }
@@ -2023,7 +2054,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         cursorChunks = [white(val), bgWhite(black(' '))];
       }
       const header = stringToStyledText('Sessions\n\nRename session: ');
-      const footer = stringToStyledText('\n\nEnter confirm   Esc cancel   ←/→ move cursor');
+      const footer = stringToStyledText('\n\nEnter confirm   Esc cancel');
       sessionsModalTextNode.content = new StyledText([
         ...header.chunks,
         ...cursorChunks,
@@ -2192,7 +2223,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         chunks.push(white('\n'));
       }
 
-      chunks.push(white('Tab/↑/↓ move   ←/→ cursor   Enter save   Esc cancel'));
+      chunks.push(white('Tab/↑/↓ move   Enter save   Esc cancel'));
       providerModalTextNode.content = new StyledText(chunks);
       providerModalNode.visible = true;
       if (inputNode.blur) {
@@ -2386,7 +2417,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         chunks.push(fg('#ff4444')(`Error: ${modelModalNotice}`));
       }
       chunks.push(white('\n\n'));
-      chunks.push(white('Enter confirm   Esc cancel   ←/→ move cursor'));
+      chunks.push(white('Enter confirm   Esc cancel'));
 
       modelModalTitleTextNode.content = stringToStyledText(titleContent.join('\n'));
       modelModalProvidersTextNode.content = stringToStyledText(providerContent.join('\n'));
@@ -2857,6 +2888,31 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         }
         return true;
       }
+      if (isCtrlA(sequence)) {
+        providerFormState.cursorOffset = 0;
+        renderProviderModal();
+        return true;
+      }
+      if (isCtrlE(sequence)) {
+        const visibleFields = getVisibleProviderFormFields(providerFormState.providerId);
+        const currentField = visibleFields[providerFormState.activeFieldIndex];
+        if (currentField) {
+          providerFormState.cursorOffset = (providerFormState.values[currentField.key] || '').length;
+          renderProviderModal();
+        }
+        return true;
+      }
+      if (isCtrlU(sequence)) {
+        const visibleFields = getVisibleProviderFormFields(providerFormState.providerId);
+        const currentField = visibleFields[providerFormState.activeFieldIndex];
+        if (currentField) {
+          const currentValue = providerFormState.values[currentField.key] || '';
+          providerFormState.values[currentField.key] = currentValue.slice(providerFormState.cursorOffset);
+          providerFormState.cursorOffset = 0;
+          renderProviderModal();
+        }
+        return true;
+      }
       if (isEnter(sequence)) {
         await saveProviderForm();
         return true;
@@ -2900,6 +2956,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       }
       if (isArrowRight(sequence)) {
         addProviderNameInput.cursorOffset = Math.min(addProviderNameInput.value.length, addProviderNameInput.cursorOffset + 1);
+        renderProviderModal();
+        return true;
+      }
+      if (isCtrlA(sequence)) {
+        addProviderNameInput.cursorOffset = 0;
+        renderProviderModal();
+        return true;
+      }
+      if (isCtrlE(sequence)) {
+        addProviderNameInput.cursorOffset = addProviderNameInput.value.length;
+        renderProviderModal();
+        return true;
+      }
+      if (isCtrlU(sequence)) {
+        addProviderNameInput.value = addProviderNameInput.value.slice(addProviderNameInput.cursorOffset);
+        addProviderNameInput.cursorOffset = 0;
         renderProviderModal();
         return true;
       }
@@ -3023,6 +3095,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         renderModelModal();
         return true;
       }
+      if (isCtrlA(sequence)) {
+        addModelInput.cursorOffset = 0;
+        renderModelModal();
+        return true;
+      }
+      if (isCtrlE(sequence)) {
+        addModelInput.cursorOffset = addModelInput.value.length;
+        renderModelModal();
+        return true;
+      }
+      if (isCtrlU(sequence)) {
+        addModelInput.value = addModelInput.value.slice(addModelInput.cursorOffset);
+        addModelInput.cursorOffset = 0;
+        renderModelModal();
+        return true;
+      }
       if (isBackspace(sequence)) {
         deleteAddModelChar();
         renderModelModal();
@@ -3067,6 +3155,22 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       }
       if (isArrowRight(sequence)) {
         moveModelFilterCursor(1);
+        renderModelModal();
+        return true;
+      }
+      if (isCtrlA(sequence)) {
+        modelModalFilter.cursorOffset = 0;
+        renderModelModal();
+        return true;
+      }
+      if (isCtrlE(sequence)) {
+        modelModalFilter.cursorOffset = modelModalFilter.value.length;
+        renderModelModal();
+        return true;
+      }
+      if (isCtrlU(sequence)) {
+        modelModalFilter.value = modelModalFilter.value.slice(modelModalFilter.cursorOffset);
+        modelModalFilter.cursorOffset = 0;
         renderModelModal();
         return true;
       }
@@ -4243,6 +4347,18 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       insertProviderFormPaste(text);
       return;
     }
+    if (providerModalOpen && addProviderNameInput) {
+      event.preventDefault();
+      const text = new TextDecoder().decode(event.bytes);
+      const normalizedText = text.replace(/\r\n/g, '\n').replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '').replace(/\n/g, ' ');
+      if (normalizedText) {
+        addProviderNameInput.value = addProviderNameInput.value.slice(0, addProviderNameInput.cursorOffset) + normalizedText + addProviderNameInput.value.slice(addProviderNameInput.cursorOffset);
+        addProviderNameInput.cursorOffset += normalizedText.length;
+        providerModalNotice = null;
+        renderProviderModal();
+      }
+      return;
+    }
     if (modelModalOpen && modelModalFocus === 'filter') {
       event.preventDefault();
       const text = new TextDecoder().decode(event.bytes);
@@ -4255,6 +4371,17 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       const text = new TextDecoder().decode(event.bytes);
       insertAddModelPaste(text);
       renderModelModal();
+      return;
+    }
+    if (sessionsModalOpen && sessionsRenaming) {
+      event.preventDefault();
+      const text = new TextDecoder().decode(event.bytes);
+      const normalizedText = text.replace(/\r\n/g, '\n').replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '').replace(/\n/g, ' ');
+      if (normalizedText) {
+        sessionsRenaming.value = sessionsRenaming.value.slice(0, sessionsRenaming.cursorOffset) + normalizedText + sessionsRenaming.value.slice(sessionsRenaming.cursorOffset);
+        sessionsRenaming.cursorOffset += normalizedText.length;
+        renderSessionsModal();
+      }
       return;
     }
   });
