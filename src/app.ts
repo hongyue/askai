@@ -1250,7 +1250,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     width: '100%',
     flexGrow: 1,
     minHeight: 0,
-    paddingX: 1,
+    paddingX: 0,
     marginBottom: 1,
     scrollY: true,
     stickyScroll: true,
@@ -3537,9 +3537,10 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         syntaxStyle: markdownSyntaxStyle,
         fg: color,
         conceal: true,
+        paddingX: 1,
       });
     } else {
-      node = Text({ id: nodeId, content: text, fg: color });
+      node = Text({ id: nodeId, content: text, fg: color, marginX: 1});
     }
     chatNodeIds.push(nodeId);
     chatNode.add(node);
