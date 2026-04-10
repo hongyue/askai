@@ -1,146 +1,63 @@
 # AGENTS.md - askai
 
-## Project Overview
-
-A terminal AI agent supporting multiple providers (OpenAI, Anthropic, Ollama, llama.cpp), MCP tool integration, and shell command execution. Built with TypeScript and Bun.
-
-## Build/Run Commands
+## Build/Release
 
 ```bash
-# Install dependencies
-bun install
-
-# Development (watch mode)
-bun run dev
-
-# Build single binary
-bun run build
-
-# Run directly
-bun run start
-
-# Run built binary
-./askai [question...]
+bun install          # Install deps
+bun run dev          # Watch mode (src/index.ts with shebang #!/usr/bin/env bun)
+bun run typecheck    # npx tsc --noEmit (no lint/test scripts configured)
+bun run build        # Runs typecheck then bun build --compile
+./askai              # Built binary
 ```
 
-**Note:** No lint or test scripts are configured. Use `npx tsc --noEmit` for type checking.
+Release: tag `v*` triggers GitHub Actions (`.github/workflows/release.yml`) which builds for linux-x64, linux-arm64, darwin-x64, darwin-arm64.
+
+## CLI
+
+```bash
+askai [question...]           # Oneshot mode
+askai                          # Interactive mode
+-p <id> -m <model> -c <path>   # Provider/model/config override
+-e on|off                      # Shell command auto-execute
+--no-mcp                       # Disable MCP
+```
+
+## Configuration
+
+`~/.askai/settings.json` or `-c <path>`. Provider `kind`: `"openai"` | `"anthropic"` | `"openrouter"` | `"custom"`.
+
+```json
+{
+  "provider": "Ollama",
+  "allowExecute": true,
+  "providers": {
+    "OpenAI": { "kind": "openai", "api_key": "...", "base_url": "...", "model": "gpt-4o" },
+    "Anthropic": { "kind": "anthropic", "api_key": "...", "model": "claude-sonnet-4-20250514" },
+    "Ollama": { "kind": "custom", "api_key": "ollama", "base_url": "http://localhost:11434/v1", "model": "llama3" }
+  },
+  "mcpServers": {}
+}
+```
 
 ## Project Structure
 
 ```
 src/
-├── index.ts          # Entry point, CLI argument parsing
-├── cli.ts            # Commander.js CLI setup
-├── app.ts            # Main terminal UI
-├── commands.ts       # Slash commands (/help, /exit, etc.)
-├── config.ts         # Config loading/saving
+├── index.ts          # Entry (has shebang, DO NOT remove)
+├── cli.ts            # Commander.js CLI, defines all options
+├── app.ts            # Main UI (oneshot vs interactive)
+├── commands.ts       # Slash commands (/help, /exit)
+├── config.ts         # Config loading (supports defaults from settings.default.json)
 ├── shell.ts          # Shell command detection/execution
-├── providers/
-│   ├── base.ts       # Provider interface
-│   ├── index.ts      # Provider exports and factory
-│   ├── openai.ts     # OpenAI provider
-│   └── anthropic.ts  # Anthropic provider
-└── mcp/
-    ├── index.ts      # MCP server manager
-    ├── client.ts     # MCP client wrapper
-    └── tools.ts      # Tool conversion utilities
+├── session.ts        # Chat session management
+├── version.ts        # appVersion export
+├── providers/        # OpenAI, Anthropic, custom (ollama/sglang/vllm)
+└── mcp/              # MCP server manager, client, tool conversion
 ```
 
-## Code Style
+## Key Notes
 
-### Imports
-- Use relative imports for local modules: `import { foo } from './bar'`
-- External packages imported normally: `import { Command } from 'commander'`
-- Type imports use `import type` when only needed for types
-
-### Types
-- Define interfaces for config, options, and data structures
-- Use `interface` over `type` for object shapes
-- Use union types for limited options: `'system' | 'user' | 'assistant'`
-- Avoid `any` when possible; use generics or specific types
-
-### Naming
-- Functions: camelCase (`loadConfig`, `createProvider`)
-- Classes: PascalCase (`MCPManager`, `OpenAIProvider`)
-- Interfaces: PascalCase (`ProviderConfig`, `Message`)
-- Constants: camelCase or UPPER_CASE for true constants
-- Files: kebab-case (`app.ts`, `base.ts`)
-
-### Functions
-- Async functions return `Promise<T>`
-- Export named functions, not default exports
-- Factory functions use `create` prefix: `createCommands`, `createInitialState`
-
-### Error Handling
-```typescript
-try {
-  await operation();
-} catch (error) {
-  const msg = error instanceof Error ? error.message : 'Unknown error';
-  console.error(`Error: ${msg}`);
-}
-```
-
-### Async Patterns
-- Use `for await...of` for async generators
-- Streaming via `AsyncGenerator<StreamChunk, void, unknown>`
-- Always handle promise rejections
-
-## CLI Options
-
-```bash
--p, --provider <name>    # Override provider
--m, --model <name>       # Override model
--c, --config <path>      # Config file path
--e, --execute <mode>     # Set shell command execution: on or off
---no-mcp                 # Disable MCP for this run
-```
-
-## Configuration
-
-Config location: `~/.askai/settings.json`
-
-```json
-{
-  "provider": "llama.cpp",
-  "providers": {
-    "llama.cpp": { "api_key": "...", "model": "...", "base_url": "..." },
-    "openai": { "api_key": "...", "model": "gpt-4o" },
-    "anthropic": { "api_key": "...", "model": "claude-sonnet-4-20250514" }
-  },
-  "allowExecute": true,
-  "mcpServers": {
-    "server-name": { "command": "npx", "args": [...] }
-  }
-}
-```
-
-## Key Patterns
-
-### Provider Interface
-```typescript
-interface Provider {
-  readonly name: string;
-  readonly model: string;
-  chat(messages: Message[], tools?): AsyncGenerator<StreamChunk>;
-}
-```
-
-### Message Format
-```typescript
-interface Message {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
-  tool_call_id?: string;
-  tool_calls?: ToolCall[];
-}
-```
-
-### Command Definition
-```typescript
-interface Command {
-  name: string;
-  description: string;
-  action: () => string | void;
-}
-```
+- `src/index.ts` shebang (`#!/usr/bin/env bun`) is required for binary execution - do not remove
+- Two modes: oneshot (args passed) vs OpenTUI (no args, interactive)
+- Provider factory in `providers/index.ts` uses `kind` field to instantiate correct provider class
+- MCP uses `@modelcontextprotocol/sdk` with stdio and Streamable HTTP transports
