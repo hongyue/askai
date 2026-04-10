@@ -266,6 +266,11 @@ function isBackspace(sequence: string): boolean {
   return sequence === '\x7f' || sequence === '\x1b[127u' || sequence === '\b';
 }
 
+// Ctrl+C - interrupt/exit
+function isCtrlC(sequence: string): boolean {
+  return sequence === '\x03' || sequence === '\x1b[99;5u';
+}
+
 // Ctrl+A - move cursor to line start
 function isCtrlA(sequence: string): boolean {
   return sequence === '\x01' || sequence === '\x1b[1;5u' || sequence === '\x1b[97;5u';
@@ -871,7 +876,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
 
   renderer.prependInputHandler((sequence: string) => {
     if (providerModalOpen || modelModalOpen) {
-      if (sequence === '\x03') {
+      if (isCtrlC(sequence)) {
         return false;
       }
       if (providerModalOpen) {
@@ -883,6 +888,9 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
 
     if (mcpDetailsOpen) {
+      if (isCtrlC(sequence)) {
+        return false;
+      }
       const states = runtime.getMcpServerStates();
       const selectedState = states[mcpServerIndex];
       const detailLineCount = getMcpDetailsContentLines(selectedState).length;
@@ -912,12 +920,18 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         renderMcpDetailsModal();
         return true;
       }
+      if (isCtrlC(sequence)) {
+        return false;
+      }
       if (sequence.length > 0) {
         return true;
       }
     }
 
     if (mcpModalOpen) {
+      if (isCtrlC(sequence)) {
+        return false;
+      }
       if (isEscape(sequence) || isCharIgnoreCase(sequence, 'q')) {
         closeMcpModal();
         return true;
@@ -958,6 +972,9 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
     }
 
     if (sessionsModalOpen) {
+      if (isCtrlC(sequence)) {
+        return false;
+      }
       if (sessionsRenaming) {
         if (isEscape(sequence)) {
           sessionsRenaming = null;
@@ -1132,6 +1149,9 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
         }
         return true;
       }
+      if (isCtrlC(sequence)) {
+        return false;
+      }
       if (sequence.length > 0) {
         return true;
       }
@@ -1141,7 +1161,7 @@ export async function runOpenTUIApp(options: RunAppOptions): Promise<void> {
       return false;
     }
 
-    if (sequence === '\x03') {
+    if (isCtrlC(sequence)) {
       return false;
     }
 
