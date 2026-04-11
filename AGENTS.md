@@ -43,21 +43,47 @@ askai                          # Interactive mode
 
 ```
 src/
-├── index.ts          # Entry (has shebang, DO NOT remove)
-├── cli.ts            # Commander.js CLI, defines all options
-├── app.ts            # Main UI (oneshot vs interactive)
-├── commands.ts       # Slash commands (/help, /exit)
-├── config.ts         # Config loading (supports defaults from settings.default.json)
-├── shell.ts          # Shell command detection/execution
-├── session.ts        # Chat session management
-├── version.ts        # appVersion export
-├── providers/        # OpenAI, Anthropic, custom (ollama/sglang/vllm)
-└── mcp/              # MCP server manager, client, tool conversion
+├── index.ts              # Entry (has shebang, DO NOT remove)
+├── cli.ts                # Commander.js CLI, defines all options
+├── app.ts                # TUIApp class (main interactive UI)
+├── oneshot.ts            # One-shot mode (non-interactive CLI)
+├── app-runtime.ts        # Runtime initialization, provider management
+├── input-utils.ts        # Keyboard matchers (Ctrl+U/A/E, arrows, etc.), formatters
+├── commands.ts           # Slash commands (/help, /exit)
+├── config.ts             # Config loading (supports defaults from settings.default.json)
+├── shell.ts              # Shell command detection/execution
+├── session.ts            # Chat session management
+├── version.ts            # appVersion export
+├── ui/
+│   ├── tui-types.ts      # Shared MutableNode interfaces
+│   ├── palette.ts        # Command palette rendering/management
+│   ├── modals.ts         # Modal rendering (provider, model, sessions)
+│   ├── modals-state.ts   # Provider/model form state + operations
+│   ├── modal-keyboard.ts # Modal keyboard handlers (Ctrl+U/A/E, paste, etc.)
+│   ├── chat.ts           # Chat loop, messaging, tool calls
+│   ├── approval.ts       # Approval dialog + shell execution
+│   └── mcp.ts            # MCP modal + connection management
+├── providers/            # OpenAI, Anthropic, custom (ollama/sglang/vllm)
+└── mcp/                  # MCP server manager, client, tool conversion
 ```
+
+## Architecture
+
+### TUIApp Class (`app.ts`)
+- `TUIApp` class uses `static async create()` factory pattern (constructor is private)
+- Composed via sub-managers: `PaletteManager`, `McpManager`, `ApprovalManager`, `ChatManager`, `ModalsStateManager`
+- Each manager takes a minimal host interface (not the full TUIApp) for encapsulation
+
+### Modal Input Handling
+- All modal inputs use manual `prependInputHandler` dispatching (not OpenTUI focus system)
+- Keyboard shortcuts: Ctrl+U (kill line), Ctrl+A (move to start), Ctrl+E (move to end), paste support
+- Modal z-order: model modal > provider modal (model checked first in key dispatch)
+- Opening model modal no longer closes provider modal; closing model modal returns focus correctly
 
 ## Key Notes
 
 - `src/index.ts` shebang (`#!/usr/bin/env bun`) is required for binary execution - do not remove
-- Two modes: oneshot (args passed) vs OpenTUI (no args, interactive)
+- Two modes: oneshot (`src/oneshot.ts`) vs OpenTUI (`src/app.ts`)
 - Provider factory in `providers/index.ts` uses `kind` field to instantiate correct provider class
 - MCP uses `@modelcontextprotocol/sdk` with stdio and Streamable HTTP transports
+- Input utilities in `input-utils.ts` support both traditional terminal and Kitty keyboard protocol
