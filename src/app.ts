@@ -173,7 +173,11 @@ export class TUIApp {
   private mcpModalNode!: MutableBoxNode;
   private mcpModalTextNode!: MutableTextNode;
   private mcpDetailsModalNode!: MutableBoxNode;
+  private mcpDetailsHeaderBox!: MutableBoxNode;
+  private mcpDetailsHeaderText!: MutableTextNode;
+  private mcpDetailsScrollBox!: MutableBoxNode;
   private mcpDetailsModalTextNode!: MutableTextNode;
+  private mcpDetailsFooterBox!: MutableBoxNode;
   private mcpDetailsModalFooterTextNode!: MutableTextNode;
   private providerModalNode!: MutableBoxNode;
   private providerModalTextNode!: MutableTextNode;
@@ -302,7 +306,11 @@ export class TUIApp {
       mcpModalNode: this.mcpModalNode,
       mcpModalTextNode: this.mcpModalTextNode,
       mcpDetailsModalNode: this.mcpDetailsModalNode,
+      mcpDetailsHeaderBox: this.mcpDetailsHeaderBox,
+      mcpDetailsHeaderText: this.mcpDetailsHeaderText,
+      mcpDetailsScrollBox: this.mcpDetailsScrollBox,
       mcpDetailsModalTextNode: this.mcpDetailsModalTextNode,
+      mcpDetailsFooterBox: this.mcpDetailsFooterBox,
       mcpDetailsModalFooterTextNode: this.mcpDetailsModalFooterTextNode,
       inputNode: this.inputNode,
       root: this.root,
@@ -428,12 +436,26 @@ export class TUIApp {
 
     const mcpDetailsModal = Box({
       id: 'mcp-details-modal', position: 'absolute', width: '74%', left: '13%', top: '22%', height: mcpDetailsModalHeight,
-      flexDirection: 'column', visible: false, backgroundColor: '#101010', padding: 1, border: true, borderColor: '#3f6d8f',
+      flexDirection: 'column', visible: false, backgroundColor: '#1a1a1a', padding: 0, border: true, borderColor: '#3f6d8f',
     });
+
+    // Header
+    const mcpDetailsHeaderBox = Box({ id: 'mcp-details-header', width: '100%', height: 1, flexShrink: 0, flexDirection: 'row', paddingLeft: 1, paddingRight: 1, backgroundColor: '#1a1a1a' });
+    const mcpDetailsHeaderText = Text({ id: 'mcp-details-header-text', content: stringToStyledText(''), fg: '#00d4ff' });
+    mcpDetailsHeaderBox.add(mcpDetailsHeaderText);
+    mcpDetailsModal.add(mcpDetailsHeaderBox);
+
+    // Body (scrollable)
+    const mcpDetailsScrollBox = ScrollBox({ id: 'mcp-details-body', width: '100%', flexGrow: 1, scrollY: true, stickyScroll: true, marginY: 1, paddingX: 1 });
     const mcpDetailsModalText = Text({ id: 'mcp-details-modal-text', content: stringToStyledText(''), fg: '#d8d8d8' });
+    mcpDetailsScrollBox.add(mcpDetailsModalText);
+    mcpDetailsModal.add(mcpDetailsScrollBox);
+
+    // Footer
+    const mcpDetailsFooterBox = Box({ id: 'mcp-details-footer', width: '100%', height: 2, flexShrink: 0, flexDirection: 'column', paddingLeft: 1, paddingRight: 1, backgroundColor: '#1a1a1a' });
     const mcpDetailsModalFooterText = Text({ id: 'mcp-details-modal-footer-text', content: stringToStyledText(''), fg: '#8f8f8f' });
-    mcpDetailsModal.add(mcpDetailsModalText);
-    mcpDetailsModal.add(mcpDetailsModalFooterText);
+    mcpDetailsFooterBox.add(mcpDetailsModalFooterText);
+    mcpDetailsModal.add(mcpDetailsFooterBox);
 
     const providerModal = Box({
       id: 'provider-modal', position: 'absolute', width: '82%', left: '9%', top: '14%', height: 'auto',
@@ -511,7 +533,11 @@ export class TUIApp {
     this.mcpModalNode = find('mcp-modal') as unknown as MutableBoxNode;
     this.mcpModalTextNode = find('mcp-modal-text') as unknown as MutableTextNode;
     this.mcpDetailsModalNode = find('mcp-details-modal') as unknown as MutableBoxNode;
+    this.mcpDetailsHeaderBox = find('mcp-details-header') as unknown as MutableBoxNode;
+    this.mcpDetailsHeaderText = find('mcp-details-header-text') as unknown as MutableTextNode;
+    this.mcpDetailsScrollBox = find('mcp-details-body') as unknown as MutableBoxNode;
     this.mcpDetailsModalTextNode = find('mcp-details-modal-text') as unknown as MutableTextNode;
+    this.mcpDetailsFooterBox = find('mcp-details-footer') as unknown as MutableBoxNode;
     this.mcpDetailsModalFooterTextNode = find('mcp-details-modal-footer-text') as unknown as MutableTextNode;
     this.providerModalNode = find('provider-modal') as unknown as MutableBoxNode;
     this.providerModalTextNode = find('provider-modal-text') as unknown as MutableTextNode;
@@ -527,7 +553,7 @@ export class TUIApp {
     // Validate
     if (!this.cmdListBoxNode || !this.cmdListTextNode || !this.statusBarTextNode || !this.statusBarStatsNode ||
         !this.headerTextNode || !this.inputNode || !this.chatNode || !this.approvalDialogNode || !this.approvalDialogTextNode ||
-        !this.mcpModalNode || !this.mcpModalTextNode || !this.mcpDetailsModalNode || !this.mcpDetailsModalTextNode || !this.mcpDetailsModalFooterTextNode ||
+        !this.mcpModalNode || !this.mcpModalTextNode || !this.mcpDetailsModalNode || !this.mcpDetailsHeaderBox || !this.mcpDetailsHeaderText || !this.mcpDetailsScrollBox || !this.mcpDetailsModalTextNode || !this.mcpDetailsFooterBox || !this.mcpDetailsModalFooterTextNode ||
         !this.providerModalNode || !this.providerModalTextNode || !this.modelModalNode || !this.modelModalTitleTextNode ||
         !this.modelModalProvidersTextNode || !this.modelModalFilterTextNode || !this.modelModalModelsTextNode ||
         !this.sessionsModalNode || !this.sessionsModalTextNode) {

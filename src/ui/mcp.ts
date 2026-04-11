@@ -58,7 +58,11 @@ export interface IMcpHost {
   mcpModalNode: MutableBoxNode;
   mcpModalTextNode: MutableTextNode;
   mcpDetailsModalNode: MutableBoxNode;
+  mcpDetailsHeaderBox: MutableBoxNode;
+  mcpDetailsHeaderText: MutableTextNode;
+  mcpDetailsScrollBox: MutableBoxNode;
   mcpDetailsModalTextNode: MutableTextNode;
+  mcpDetailsFooterBox: MutableBoxNode;
   mcpDetailsModalFooterTextNode: MutableTextNode;
   inputNode: MutableInputNode;
   root: { requestRender(): void };
@@ -174,6 +178,7 @@ export class McpManager {
     this.host.state.mcpDetailsOpen = false;
     this.host.state.mcpDetailsScrollOffset = 0;
     this.host.mcpDetailsModalNode.visible = false;
+    this.host.mcpDetailsHeaderText.content = stringToStyledText('');
     this.host.mcpDetailsModalTextNode.content = stringToStyledText('');
     this.host.mcpDetailsModalFooterTextNode.content = stringToStyledText('');
     this.syncMcpLifecycleRefreshTimer();
@@ -270,14 +275,19 @@ export class McpManager {
     }
 
     const allLines = getMcpDetailsContentLines(selectedState);
-    const visibleLineCount = Math.max(1, mcpDetailsVisibleLineCount - mcpDetailsFooterLineCount);
+    const headerText = `  ${selectedState.name} — ${selectedState.connected ? 'Connected' : 'Disconnected'} ${selectedState.lifecycle === 'connecting' || selectedState.lifecycle === 'disconnecting' || selectedState.lifecycle === 'refreshing' ? `(${selectedState.lifecycle})` : ''}`;
+    this.host.mcpDetailsHeaderText.content = stringToStyledText(headerText);
+
+    const footerHeight = 2;
+    const headerHeight = 1;
+    const scrollableHeight = mcpDetailsModalHeight - headerHeight - footerHeight;
+    const visibleLineCount = Math.max(1, scrollableHeight);
     const maxOffset = Math.max(0, allLines.length - visibleLineCount);
     const s = this.host.state;
     s.mcpDetailsScrollOffset = Math.max(0, Math.min(s.mcpDetailsScrollOffset, maxOffset));
     const visibleLines = allLines.slice(s.mcpDetailsScrollOffset, s.mcpDetailsScrollOffset + visibleLineCount);
     this.host.mcpDetailsModalTextNode.content = stringToStyledText(visibleLines.join('\n'));
     this.host.mcpDetailsModalFooterTextNode.content = stringToStyledText([
-      '',
       `Scroll ${s.mcpDetailsScrollOffset + 1}-${Math.min(s.mcpDetailsScrollOffset + visibleLines.length, allLines.length)} / ${allLines.length}`,
       '\u2191/\u2193 scroll   PgUp/PgDn jump   Esc/q close',
     ].join('\n'));
