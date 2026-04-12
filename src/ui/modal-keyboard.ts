@@ -69,6 +69,11 @@ export interface ModalKeyboardContext {
   cancelAddModelInput(): void;
   confirmAddModelInput(): Promise<void>;
   deleteSelectedCustomModel(): Promise<void>;
+  showDeleteModelConfirmation(model: string, providerId: string): void;
+  setDeleteModelConfirm(confirm: { model: string; providerId: string } | null): void;
+  deleteModelConfirm: { model: string; providerId: string } | null;
+  onModelDeleteConfirmed?(model: string, providerId: string): Promise<void>;
+  onSessionDeleteConfirmed?(id: string): void;
   applyModelSelection(): Promise<void>;
   moveProviderFormField(delta: number): void;
   moveProviderFormCursor(delta: number): void;
@@ -465,6 +470,22 @@ export async function handleModelModalKey(ctx: ModalKeyboardContext, sequence: s
     }
     return true;
   }
+
+  // Handle delete model confirmation
+  const delModelConfirm = ctx.deleteModelConfirm;
+  if (delModelConfirm) {
+    if (isCharIgnoreCase(sequence, 'y')) {
+      await ctx.onModelDeleteConfirmed?.(delModelConfirm.model, delModelConfirm.providerId);
+      return true;
+    }
+    if (isEscape(sequence) || isCharIgnoreCase(sequence, 'n')) {
+      ctx.setDeleteModelConfirm(null);
+      ctx.renderModelModal();
+      return true;
+    }
+    return true;
+  }
+
   if (isEscape(sequence) || isCharIgnoreCase(sequence, 'q')) {
     ctx.closeModelModal();
     return true;
@@ -520,7 +541,16 @@ export async function handleModelModalKey(ctx: ModalKeyboardContext, sequence: s
     return true;
   }
   if (isCharIgnoreCase(sequence, 'd')) {
-    await ctx.deleteSelectedCustomModel();
+    const provider = ctx.getSelectedModelModalProvider();
+    if (!provider) return true;
+    const models = ctx.getModelModalModels(provider);
+    if (models.length > 0 && ctx.getModelModalFocus() === 'models') {
+      const model = models[ctx.getModelModalModelIndex()];
+      if (model) {
+        ctx.showDeleteModelConfirmation(model, provider.id);
+        return true;
+      }
+    }
     return true;
   }
   if (isEnter(sequence)) {

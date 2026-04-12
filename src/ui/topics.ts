@@ -2,7 +2,7 @@
  * Topic browser: floating modal that lists user messages for quick navigation.
  */
 
-import { stringToStyledText } from "@opentui/core";
+import { stringToStyledText, StyledText, fg, white, bgWhite, black } from "@opentui/core";
 import type { Message } from "../providers/base";
 import type { MutableTextNode, MutableBoxNode } from "./tui-types";
 
@@ -67,6 +67,22 @@ export function filterTopics(topics: TopicEntry[], filter: string): TopicEntry[]
   return topics.filter(t => t.content.toLowerCase().includes(f));
 }
 
+function formatFilterValue(value: string, cursorOffset: number): any[] {
+  if (value.length === 0) {
+    return [white('(type to filter)')];
+  }
+  const clampedOffset = Math.max(0, Math.min(cursorOffset, value.length));
+  if (clampedOffset < value.length) {
+    const char = value[clampedOffset];
+    return [
+      white(value.slice(0, clampedOffset)),
+      bgWhite(black(char)),
+      white(value.slice(clampedOffset + 1)),
+    ];
+  }
+  return [white(value), bgWhite(black(' '))];
+}
+
 export function getVisibleTopics(topics: TopicEntry[], selectedIndex: number, scrollOffset: number, visibleCount: number): { items: TopicEntry[]; scrollOffset: number } {
   let offset = scrollOffset;
   if (selectedIndex < offset) offset = selectedIndex;
@@ -85,7 +101,10 @@ export interface ITopicBrowserHost {
   chatNode: { scrollChildIntoView?(childId: string): void };
   root: { requestRender(): void };
   topicsModalNode: MutableBoxNode;
+  topicsModalHeader: MutableTextNode;
+  topicsModalScroll: MutableBoxNode;
   topicsModalText: MutableTextNode;
+  inputNode: { blur?(): void; focus?(): void };
 }
 
 // ── Manager ──────────────────────────────────────────────────────────────────
@@ -105,6 +124,7 @@ export class TopicBrowserManager {
     this.host.state.open = true;
     const allTopics = this.getTopics();
     this.host.state.selectedIndex = Math.max(0, allTopics.length - 1); // start at most recent
+    this.host.inputNode.blur?.();
     this.render();
   }
 
@@ -115,6 +135,7 @@ export class TopicBrowserManager {
     this.host.state.selectedIndex = 0;
     this.host.topicsModalNode.visible = false;
     this.host.root.requestRender();
+    this.host.inputNode.focus?.();
   }
 
   navigateUp(): void {
@@ -129,6 +150,22 @@ export class TopicBrowserManager {
     const allTopics = this.getTopics();
     if (allTopics.length === 0) return;
     this.host.state.selectedIndex = Math.min(allTopics.length - 1, this.host.state.selectedIndex + 1);
+    this.host.state.scrollOffset = this.getScrollOffset();
+    this.render();
+  }
+
+  pageUp(): void {
+    const allTopics = this.getTopics();
+    if (allTopics.length === 0) return;
+    this.host.state.selectedIndex = Math.max(0, this.host.state.selectedIndex - TOPICS_VISIBLE_COUNT);
+    this.host.state.scrollOffset = this.getScrollOffset();
+    this.render();
+  }
+
+  pageDown(): void {
+    const allTopics = this.getTopics();
+    if (allTopics.length === 0) return;
+    this.host.state.selectedIndex = Math.min(allTopics.length - 1, this.host.state.selectedIndex + TOPICS_VISIBLE_COUNT);
     this.host.state.scrollOffset = this.getScrollOffset();
     this.render();
   }
@@ -169,77 +206,70 @@ export class TopicBrowserManager {
     const { items, scrollOffset } = getVisibleTopics(allTopics, this.host.state.selectedIndex, this.host.state.scrollOffset, TOPICS_VISIBLE_COUNT);
     this.host.state.scrollOffset = scrollOffset;
 
-    const lines: string[] = [];
-
-    // Title + filter
+    // Header: title
     const titleText = this.host.state.keyword
       ? `Topics: "${this.host.state.keyword}"  (type to filter, ↑↓ jump, Enter select, Esc close)`
       : `Topics: all user messages  (type to filter, ↑↓ jump, Enter select, Esc close)`;
-    lines.push(titleText);
-    lines.push('');
+    this.host.topicsModalHeader.content = stringToStyledText(titleText);
 
-    // Filter input
-    const filterCursor = Math.max(0, Math.min(this.host.state.filter.cursorOffset, this.host.state.filter.value.length));
-    const filterVal = this.host.state.filter.value;
-    if (filterVal.length > 0) {
-      if (filterCursor < filterVal.length) {
-        lines.push(` > ${filterVal.slice(0, filterCursor)}${filterVal[filterCursor]}${filterVal.slice(filterCursor + 1)}`);
-      } else {
-        lines.push(` > ${filterVal} `);
-      }
-    } else {
-      lines.push(' > (type to filter)');
-    }
+    // Filter input with proper cursor rendering (same as model modal)
+    const filterChunks = formatFilterValue(this.host.state.filter.value, this.host.state.filter.cursorOffset);
+    const filterContent = [white('Filter  '), ...filterChunks];
     if (allTopics.length > TOPICS_VISIBLE_COUNT) {
-      lines.push(`  ${allTopics.length} topics  (${scrollOffset + 1}-${Math.min(scrollOffset + TOPICS_VISIBLE_COUNT, allTopics.length)})`);
+      filterContent.push(white(`  (${allTopics.length} topics, ${scrollOffset + 1}-${Math.min(scrollOffset + TOPICS_VISIBLE_COUNT, allTopics.length)})`));
     }
-    lines.push('');
+    this.host.topicsModalHeader.content = new StyledText(filterContent);
 
-    // Topic list
-    items.forEach((topic, visibleIdx) => {
-      const actualIdx = scrollOffset + visibleIdx;
-      const isSelected = actualIdx === this.host.state.selectedIndex;
-      const marker = isSelected ? '[>] ' : '    ';
-      lines.push(`${marker}${topic.snippet}`);
-    });
-
+    // Scrollable body: all topics
+    const bodyLines: string[] = [];
     if (allTopics.length === 0) {
       const totalMessages = this.host.messages.length;
       const userMessages = this.host.messages.filter(m => m.role === 'user').length;
-      lines.push(`  No user topics found (${userMessages} user messages in ${totalMessages} total)`);
-      lines.push('');
+      bodyLines.push(`  No user topics found (${userMessages} user messages in ${totalMessages} total)`);
+    } else {
+      items.forEach((topic, visibleIdx) => {
+        const actualIdx = scrollOffset + visibleIdx;
+        const isSelected = actualIdx === this.host.state.selectedIndex;
+        const marker = isSelected ? '[>] ' : '    ';
+        bodyLines.push(`${marker}${topic.snippet}`);
+      });
     }
-
-    const text = lines.join('\n');
-
-    this.host.topicsModalText.content = stringToStyledText(text);
+    this.host.topicsModalText.content = stringToStyledText(bodyLines.join('\n'));
     this.host.topicsModalNode.visible = true;
     this.host.root.requestRender();
   }
 
   updateFilterValue(delta: number): void {
-    this.host.state.filter.cursorOffset = Math.max(0, this.host.state.filter.cursorOffset + delta);
+    this.host.state.filter.cursorOffset = Math.max(0, Math.min(this.host.state.filter.cursorOffset + delta, this.host.state.filter.value.length));
     this.recomputeFilter();
     this.render();
   }
 
-  insertFilterChar(char: string): void {
+  insertFilterText(text: string): void {
     const f = this.host.state.filter;
     const offset = Math.max(0, Math.min(f.cursorOffset, f.value.length));
-    f.value = f.value.slice(0, offset) + char + f.value.slice(offset);
-    f.cursorOffset = offset + 1;
+    f.value = f.value.slice(0, offset) + text + f.value.slice(offset);
+    f.cursorOffset = offset + text.length;
     this.recomputeFilter();
     this.render();
   }
 
-  deleteFilterChar(): void {
+  deleteFilterText(): void {
     const f = this.host.state.filter;
-    if (f.cursorOffset > 0) {
-      f.value = f.value.slice(0, f.cursorOffset - 1) + f.value.slice(f.cursorOffset);
-      f.cursorOffset = f.cursorOffset - 1;
-      this.recomputeFilter();
-      this.render();
-    }
+    if (f.cursorOffset <= 0) return;
+    f.value = f.value.slice(0, f.cursorOffset - 1) + f.value.slice(f.cursorOffset);
+    f.cursorOffset = f.cursorOffset - 1;
+    this.recomputeFilter();
+    this.render();
+  }
+
+  insertFilterPaste(text: string): void {
+    const normalizedText = text
+      .replace(/\r\n/g, '\n')
+      .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '')
+      .replace(/\n/g, ' ');
+    if (!normalizedText) return;
+    this.insertFilterText(normalizedText);
   }
 
   private recomputeFilter(): void {

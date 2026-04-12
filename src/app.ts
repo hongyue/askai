@@ -169,6 +169,8 @@ export class TUIApp {
   private cmdListBoxNode!: MutableBoxNode;
   private cmdListTextNode!: MutableTextNode;
   private topicsModalNode!: MutableBoxNode;
+  private topicsModalHeader!: MutableTextNode;
+  private topicsModalScroll!: MutableBoxNode;
   private topicsModalText!: MutableTextNode;
   private statusBarTextNode!: MutableTextNode;
   private statusBarStatsNode!: MutableTextNode;
@@ -500,15 +502,19 @@ export class TUIApp {
     const sessionsModalText = Text({ id: 'sessions-modal-text', content: stringToStyledText(''), fg: '#d8d8d8' });
     sessionsModal.add(sessionsModalText);
 
-    // Topics browser (centered floating modal)
+    // Topics browser (bottom-right scrollable panel)
     const topicsModal = Box({
-      id: 'topics-modal', position: 'absolute', width: '50%', left: '25%', top: '30%',
-      height: 18, backgroundColor: '#1a1a1a', padding: 1,
+      id: 'topics-modal', position: 'absolute', width: '36%', right: 2, bottom: 6,
+      height: 'auto', maxHeight: 20, backgroundColor: '#1a1a1a', padding: 1,
       border: true, borderColor: '#ffaa00', visible: false,
       flexDirection: 'column',
     });
+    const topicsModalHeader = Text({ id: 'topics-modal-header', content: stringToStyledText(''), fg: '#d8d8d8' });
+    const topicsModalScroll = ScrollBox({ id: 'topics-modal-scroll', width: '100%', flexGrow: 1, scrollY: true, stickyScroll: false, paddingX: 0, marginY: 1 });
     const topicsModalText = Text({ id: 'topics-modal-text', content: stringToStyledText(''), fg: '#d8d8d8' });
-    topicsModal.add(topicsModalText);
+    topicsModalScroll.add(topicsModalText);
+    topicsModal.add(topicsModalHeader);
+    topicsModal.add(topicsModalScroll);
 
     const inputRow = Box({ id: 'input-row', width: '100%', height: 'auto', flexShrink: 0, flexDirection: 'row', backgroundColor: '#1f1f1f', paddingLeft: 0, paddingRight: 1 });
     inputRow.add(Box({ width: 2, height: '100%', flexDirection: 'column', backgroundColor: '#1f1f1f', border: false }).add(Text({ content: '>', fg: '#00d4ff' })));
@@ -544,6 +550,8 @@ export class TUIApp {
     this.cmdListBoxNode = find('cmd-list-box') as unknown as MutableBoxNode;
     this.cmdListTextNode = find('command-palette') as unknown as MutableTextNode;
     this.topicsModalNode = find('topics-modal') as unknown as MutableBoxNode;
+    this.topicsModalHeader = find('topics-modal-header') as unknown as MutableTextNode;
+    this.topicsModalScroll = find('topics-modal-scroll') as unknown as MutableBoxNode;
     this.topicsModalText = find('topics-modal-text') as unknown as MutableTextNode;
     this.statusBarTextNode = find('status-bar-text') as unknown as MutableTextNode;
     this.statusBarStatsNode = find('status-bar-stats') as unknown as MutableTextNode;
@@ -573,7 +581,7 @@ export class TUIApp {
     this.root = this.renderer.root as unknown as BoxRenderable;
 
     // Validate
-    if (!this.cmdListBoxNode || !this.cmdListTextNode || !this.topicsModalNode || !this.topicsModalText || !this.statusBarTextNode || !this.statusBarStatsNode ||
+    if (!this.cmdListBoxNode || !this.cmdListTextNode || !this.topicsModalNode || !this.topicsModalHeader || !this.topicsModalScroll || !this.topicsModalText || !this.statusBarTextNode || !this.statusBarStatsNode ||
         !this.headerTextNode || !this.inputNode || !this.chatNode || !this.approvalDialogNode || !this.approvalDialogTextNode ||
         !this.mcpModalNode || !this.mcpModalTextNode || !this.mcpDetailsModalNode || !this.mcpDetailsHeaderBox || !this.mcpDetailsHeaderText || !this.mcpDetailsScrollBox || !this.mcpDetailsModalTextNode || !this.mcpDetailsFooterBox || !this.mcpDetailsModalFooterTextNode ||
         !this.providerModalNode || !this.providerModalTextNode || !this.modelModalNode || !this.modelModalTitleTextNode ||
@@ -637,6 +645,15 @@ export class TUIApp {
       } else if (event.scroll?.direction === 'down') {
         this.mcpState.mcpDetailsScrollOffset = Math.max(0, this.mcpState.mcpDetailsScrollOffset + delta);
         this.mcpUI.renderMcpDetailsModal();
+      }
+    };
+    this.topicsModalNode.onMouseScroll = (event) => {
+      if (!this.topicsState) return;
+      const direction = event.scroll?.direction;
+      if (direction === 'up') {
+        this.navigateTopicsUp();
+      } else if (direction === 'down') {
+        this.navigateTopicsDown();
       }
     };
   }
@@ -738,7 +755,7 @@ export class TUIApp {
     };
 
     renderer.prependInputHandler((sequence: string) => {
-      if (this.mcpState.mcpModalOpen || this.mcpState.mcpDetailsOpen || this.approvalState.pendingExecution || this.modalsState.providerModalOpen || this.modalsState.modelModalOpen || this.modalsState.sessionsModalOpen) return false;
+      if (this.mcpState.mcpModalOpen || this.mcpState.mcpDetailsOpen || this.approvalState.pendingExecution || this.modalsState.providerModalOpen || this.modalsState.modelModalOpen || this.modalsState.sessionsModalOpen || this.topicsState) return false;
       if (shiftEnterSequences.has(sequence)) { this.insertInputNewline(); return true; }
       if (sequence.length > 0 && !sequence.includes('\x1b') && this.inputNode) {
         const hasNonAscii = [...sequence].some(c => c.charCodeAt(0) > 127);
@@ -762,6 +779,11 @@ export class TUIApp {
           if (this.modalsState.modelModalOpen && this.modalsState.modelModalFocus === 'filter') {
             this.modalsManager.insertModelFilterText(key.sequence);
             this.renderModelModal();
+            return;
+          }
+          if (this.topicsState) {
+            this.getTopicsBrowser().insertFilterText(key.sequence);
+            this.renderTopicsModal();
             return;
           }
           if (this.inputNode && !this.mcpState.mcpModalOpen && !this.approvalState.pendingExecution && !this.modalsState.sessionsModalOpen) {
@@ -822,7 +844,7 @@ export class TUIApp {
 
     // Paste handler
     this.renderer.keyInput.on('paste', (event) => {
-      if (!this.modalsState.providerModalOpen && !this.modalsState.modelModalOpen && !this.mcpState.mcpModalOpen && !this.approvalState.pendingExecution && !this.modalsState.sessionsModalOpen) {
+      if (!this.modalsState.providerModalOpen && !this.modalsState.modelModalOpen && !this.mcpState.mcpModalOpen && !this.approvalState.pendingExecution && !this.modalsState.sessionsModalOpen && !this.topicsState) {
         event.preventDefault();
         const text = new TextDecoder().decode(event.bytes);
         if (text && this.inputNode) { this.inputNode.insertText(text); this.inputBuffer = this.inputNode.plainText; }
@@ -869,6 +891,13 @@ export class TUIApp {
           this.modalsState.sessionsRenaming.cursorOffset += normalizedText.length;
           this.renderSessionsModal();
         }
+        return;
+      }
+      if (this.topicsState) {
+        event.preventDefault();
+        const text = new TextDecoder().decode(event.bytes);
+        this.getTopicsBrowser().insertFilterPaste(text);
+        this.renderTopicsModal();
         return;
       }
     });
@@ -982,7 +1011,10 @@ export class TUIApp {
         chatNode: this.chatNode,
         root: this.root,
         topicsModalNode: this.topicsModalNode,
+        topicsModalHeader: this.topicsModalHeader,
+        topicsModalScroll: this.topicsModalScroll,
         topicsModalText: this.topicsModalText,
+        inputNode: this.inputNode,
       });
     }
     return this.topicsBrowser!;
@@ -1032,15 +1064,59 @@ export class TUIApp {
     if (isEnter(sequence)) { void this.selectAndJumpTopics(); return true; }
     if (isArrowUp(sequence)) { this.navigateTopicsUp(); return true; }
     if (isArrowDown(sequence)) { this.navigateTopicsDown(); return true; }
-    if (isBackspace(sequence)) { this.getTopicsBrowser().deleteFilterChar(); this.renderTopicsModal(); return true; }
-    if (isArrowLeft(sequence)) { this.getTopicsBrowser().updateFilterValue(-1); this.renderTopicsModal(); return true; }
-    if (isArrowRight(sequence)) { this.getTopicsBrowser().updateFilterValue(1); this.renderTopicsModal(); return true; }
-    if (isCtrlA(sequence)) { this.getTopicsBrowser().updateFilterValue(-9999); this.renderTopicsModal(); return true; }
-    if (isCtrlE(sequence)) { this.getTopicsBrowser().updateFilterValue(9999); this.renderTopicsModal(); return true; }
-    if (isCtrlU(sequence)) { this.getTopicsBrowser().updateFilterValue(-9999); this.getTopicsBrowser().deleteFilterChar(); this.renderTopicsModal(); return true; }
-    const char = getChar(sequence);
-    if (char && char.charCodeAt(0) >= 32) { this.getTopicsBrowser().insertFilterChar(char); this.renderTopicsModal(); return true; }
+    if (sequence === '\x1b[5~' || sequence === '\x1b[5~') { this.pageTopicsUp(); return true; } // PgUp
+    if (sequence === '\x1b[6~' || sequence === '\x1b[6~') { this.pageTopicsDown(); return true; } // PgDn
+    // Filter text input (standard modal pattern)
+    if (isArrowLeft(sequence)) {
+      this.getTopicsBrowser().updateFilterValue(-1);
+      this.renderTopicsModal();
+      return true;
+    }
+    if (isArrowRight(sequence)) {
+      this.getTopicsBrowser().updateFilterValue(1);
+      this.renderTopicsModal();
+      return true;
+    }
+    if (isCtrlA(sequence)) {
+      this.topicsState.filter.cursorOffset = 0;
+      this.renderTopicsModal();
+      return true;
+    }
+    if (isCtrlE(sequence)) {
+      this.topicsState.filter.cursorOffset = this.topicsState.filter.value.length;
+      this.renderTopicsModal();
+      return true;
+    }
+    if (isCtrlU(sequence)) {
+      this.topicsState.filter.value = this.topicsState.filter.value.slice(this.topicsState.filter.cursorOffset);
+      this.topicsState.filter.cursorOffset = 0;
+      this.renderTopicsModal();
+      return true;
+    }
+    if (isBackspace(sequence)) {
+      this.getTopicsBrowser().deleteFilterText();
+      this.renderTopicsModal();
+      return true;
+    }
+    {
+      const char = getChar(sequence);
+      if (char !== null && char.charCodeAt(0) >= 32) {
+        this.getTopicsBrowser().insertFilterText(char);
+        this.renderTopicsModal();
+        return true;
+      }
+    }
     return true;
+  }
+
+  private pageTopicsUp(): void {
+    if (!this.topicsState) return;
+    this.getTopicsBrowser().pageUp();
+  }
+
+  private pageTopicsDown(): void {
+    if (!this.topicsState) return;
+    this.getTopicsBrowser().pageDown();
   }
 
   // ── Rendering ──────────────────────────────────────────────────────────
@@ -1143,6 +1219,8 @@ export class TUIApp {
       sessionsSelectedIndex: this.modalsState.sessionsSelectedIndex,
       sessionsScrollOffset: this.modalsState.sessionsScrollOffset,
       sessionsRenaming: this.modalsState.sessionsRenaming,
+      deleteSessionConfirm: this.modalsState.deleteSessionConfirm,
+      deleteModelConfirm: this.modalsState.deleteModelConfirm,
       currentSession: {
         id: this.chatState.currentSession.id,
         title: this.chatState.currentSession.title,
@@ -1213,6 +1291,12 @@ export class TUIApp {
       confirmAddModelInput: () => mm.confirmAddModelInput(),
       deleteSelectedCustomModel: () => mm.deleteSelectedCustomModel(),
       applyModelSelection: () => mm.applyModelSelection(),
+      showDeleteModelConfirmation: (m, p) => mm.showDeleteModelConfirmation(m, p),
+      setDeleteModelConfirm: (s) => { this.modalsState.deleteModelConfirm = s; },
+      deleteModelConfirm: this.modalsState.deleteModelConfirm,
+      onModelDeleteConfirmed: async (m, p) => {
+        this.deleteModelConfirmAction(m, p);
+      },
       moveProviderFormField: (d) => mm.moveProviderFormField(d),
       moveProviderFormCursor: (d) => mm.moveProviderFormCursor(d),
       saveProviderForm: () => mm.saveProviderForm(),
@@ -1236,9 +1320,11 @@ export class TUIApp {
         const newTitle = ms.sessionsRenaming.value.trim();
         if (newTitle) {
           this.renameSession(ms.sessionsRenaming.id, newTitle);
+          ms.sessionsList = this.listSessions();
           if (ms.sessionsRenaming.id === this.chatState.currentSession.id) {
             this.chatState.currentSession = { ...this.chatState.currentSession, title: newTitle };
             this.renderHeader();
+            this.renderStatusBar();
           }
         }
         ms.sessionsRenaming = null;
@@ -1340,22 +1426,50 @@ export class TUIApp {
       if (ms.sessionsList.length > 0) {
         const selected = ms.sessionsList[ms.sessionsSelectedIndex];
         if (selected) {
-          const wasActive = selected.id === this.chatState.currentSession.id;
-          this.deleteSession(selected.id);
-          if (wasActive) {
-            this.chatState.currentSession = this.runtime.startNewSession();
-            this.chatManager.clearAllMessages();
-            this.renderHeader();
-            this.renderStatusBar();
-          }
-          ms.sessionsList = this.listSessions();
-          ms.sessionsSelectedIndex = Math.min(ms.sessionsSelectedIndex, Math.max(0, ms.sessionsList.length - 1));
-          this.renderSessionsModal();
+          this.modalsManager.showDeleteSessionConfirmation(selected.id);
         }
       }
       return true;
     }
+    if (ms.deleteSessionConfirm) {
+      if (isCharIgnoreCase(sequence, 'y')) {
+        const wasActive = ms.deleteSessionConfirm.id === this.chatState.currentSession.id;
+        this.deleteSession(ms.deleteSessionConfirm.id);
+        if (wasActive) {
+          this.chatState.currentSession = this.runtime.startNewSession();
+          this.chatManager.clearAllMessages();
+          this.renderHeader();
+          this.renderStatusBar();
+        }
+        ms.deleteSessionConfirm = null;
+        ms.sessionsList = this.listSessions();
+        ms.sessionsSelectedIndex = Math.min(ms.sessionsSelectedIndex, Math.max(0, ms.sessionsList.length - 1));
+        this.renderSessionsModal();
+        return true;
+      }
+      if (isEscape(sequence) || isCharIgnoreCase(sequence, 'n')) {
+        ms.deleteSessionConfirm = null;
+        this.renderSessionsModal();
+        return true;
+      }
+      return true;
+    }
     return true;
+  }
+
+  private async deleteModelConfirmAction(model: string, providerId: string): Promise<void> {
+    const provider = this.config.providers[providerId];
+    if (!provider) return;
+
+    removeProviderModel(this.config, providerId, model);
+    if (this.chatState.currentSession.provider === providerId && this.chatState.currentSession.model === model) {
+      this.chatState.currentSession.model = '';
+      this.renderStatusBar();
+    }
+    this.modalsState.deleteModelConfirm = null;
+    this.modalsState.modelModalNotice = `Deleted model ${model} from ${providerId}.`;
+    this.modalsManager.syncModelModalSelection(providerId, undefined);
+    this.renderModelModal();
   }
 
   // ── Input helpers ──────────────────────────────────────────────────────

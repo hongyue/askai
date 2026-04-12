@@ -114,6 +114,8 @@ export interface ModalRenderContext {
   sessionsSelectedIndex: number;
   sessionsScrollOffset: number;
   sessionsRenaming: { id: string; value: string; cursorOffset: number } | null;
+  deleteSessionConfirm: { id: string } | null;
+  deleteModelConfirm: { model: string; providerId: string } | null;
   currentSession: { id: string; title: string; provider: string; model: string };
   messages: Array<{ role: string }>;
 
@@ -355,6 +357,25 @@ export function renderModelModal(ctx: ModalRenderContext): void {
     return `${prefix} ${model}${active}`;
   });
 
+  // Handle delete model confirmation
+  if (ctx.deleteModelConfirm) {
+    const lines = [
+      'Delete model',
+      '',
+      `Delete "${ctx.deleteModelConfirm.model}" from ${ctx.deleteModelConfirm.providerId}?`,
+      '',
+      'y confirm   n/Esc cancel',
+    ];
+    ctx.modelModalTitleTextNode.content = stringToStyledText('Confirm delete\n');
+    ctx.modelModalProvidersTextNode.content = stringToStyledText('');
+    ctx.modelModalFilterTextNode.content = stringToStyledText('');
+    ctx.modelModalModelsTextNode.content = stringToStyledText(lines.join('\n'));
+    ctx.modelModalNode.visible = true;
+    if (ctx.inputNode.blur) ctx.inputNode.blur();
+    ctx.root.requestRender();
+    return;
+  }
+
   // Handle add model input state
   if (ctx.addModelInput) {
     const val = ctx.addModelInput.value;
@@ -450,6 +471,23 @@ export function renderSessionsModal(ctx: ModalRenderContext): void {
     ctx.sessionsModalTextNode.content = stringToStyledText('');
     ctx.root.requestRender();
     ctx.inputNode.focus();
+    return;
+  }
+
+  if (ctx.deleteSessionConfirm) {
+    const session = ctx.sessionsList.find(s => s.id === ctx.deleteSessionConfirm!.id);
+    const title = session ? `"${session.title}"` : 'this session';
+    const lines = [
+      'Delete session',
+      '',
+      `Delete ${title}? This cannot be undone.`,
+      '',
+      'y confirm   n/Esc cancel',
+    ];
+    ctx.sessionsModalTextNode.content = stringToStyledText(lines.join('\n'));
+    ctx.sessionsModalNode.visible = true;
+    if (ctx.inputNode.blur) ctx.inputNode.blur();
+    ctx.root.requestRender();
     return;
   }
 

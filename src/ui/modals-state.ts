@@ -110,6 +110,7 @@ export interface ModalsState {
   addModelInputProviderId: string;
   addModelInputProviderName: string;
   modelModalNotice: string | null;
+  deleteModelConfirm: { model: string; providerId: string } | null;
 
   // Sessions modal
   sessionsModalOpen: boolean;
@@ -117,6 +118,7 @@ export interface ModalsState {
   sessionsSelectedIndex: number;
   sessionsScrollOffset: number;
   sessionsRenaming: { id: string; value: string; cursorOffset: number } | null;
+  deleteSessionConfirm: { id: string } | null;
 }
 
 export function createModalsState(): ModalsState {
@@ -139,11 +141,13 @@ export function createModalsState(): ModalsState {
     addModelInputProviderId: '',
     addModelInputProviderName: '',
     modelModalNotice: null,
+    deleteModelConfirm: null,
     sessionsModalOpen: false,
     sessionsList: [],
     sessionsSelectedIndex: 0,
     sessionsScrollOffset: 0,
     sessionsRenaming: null,
+    deleteSessionConfirm: null,
   };
 }
 
@@ -661,6 +665,17 @@ export class ModalsStateManager {
     this.syncProviderModalSelections(this.host.config.provider);
     await this.host.refreshActiveProviderView();
     this.host.renderProviderModal();
+  }
+
+  showDeleteSessionConfirmation(id: string): void {
+    this.host.state.deleteSessionConfirm = { id };
+    this.host.renderSessionsModal();
+  }
+
+  showDeleteModelConfirmation(model: string, providerId: string): void {
+    this.host.state.deleteModelConfirm = { model, providerId };
+    this.host.state.modelModalNotice = null;
+    this.host.renderModelModal();
   }
 
   async addCustomProvider(name: string): Promise<void> {
