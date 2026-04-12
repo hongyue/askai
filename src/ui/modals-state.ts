@@ -4,6 +4,7 @@
  * Encapsulates all provider, model, and sessions modal state and operations.
  */
 
+import type { ProviderType } from '../config';
 import {
   isPresetProviderId,
   isProviderIdUnique,
@@ -28,8 +29,9 @@ import { clampScrollOffset } from "../input-utils";
 const providerModalVisibleItems = 8;
 const providerModalVisibleModels = 8;
 
-const providerFormFields: Array<{ key: string; label: string; kind: 'text' }> = [
+const providerFormFields: Array<{ key: string; label: string; kind: 'text' | 'select' }> = [
   { key: 'id', label: 'Provider Name', kind: 'text' },
+  { key: 'type', label: 'Type', kind: 'select' },
   { key: 'api_key', label: 'API Key', kind: 'text' },
   { key: 'base_url', label: 'Base URL', kind: 'text' },
   { key: 'model', label: 'Model Name', kind: 'text' },
@@ -50,7 +52,7 @@ export interface ProviderFormState {
 export interface ProviderFormField {
   key: string;
   label: string;
-  kind: 'text';
+  kind: 'text' | 'select';
 }
 
 export interface FilterState {
@@ -61,7 +63,7 @@ export interface FilterState {
 export interface ProviderSlot {
   id: string;
   displayName: string;
-  kind: 'openai' | 'anthropic' | 'openrouter' | 'custom';
+  type: ProviderType;
   configured: boolean;
   apiKeyConfigured: boolean;
   baseUrl?: string;
@@ -150,6 +152,7 @@ export function createModalsState(): ModalsState {
 export function normalizeProviderFormValues(values: Record<string, string>): Record<string, string> {
   const nextValues = { ...values };
   nextValues.id = nextValues.id || '';
+  nextValues.type = nextValues.type || 'openai-compatible';
   nextValues.api_key = nextValues.api_key || '';
   nextValues.base_url = nextValues.base_url || '';
   nextValues.model = nextValues.model || '';
@@ -166,14 +169,11 @@ export function filterModels(models: string[], filterValue: string): string[] {
 
 export function getVisibleProviderFormFields(providerId: string): ProviderFormField[] {
   const preset = getPresetProviderMeta(providerId);
-  const isCustomLike = !preset || preset.kind === 'custom';
   const isCustomProvider = !preset;
 
   return providerFormFields.filter(field => {
-    if (field.key === 'id') return isCustomProvider;
-    if (field.key === 'base_url') return isCustomLike;
-    if (field.key === 'model') return isCustomLike;
-    return field.key === 'api_key';
+    if (field.key === 'id' || field.key === 'type') return isCustomProvider;
+    return true; // api_key, base_url, model always shown
   });
 }
 
@@ -259,7 +259,7 @@ export class ModalsStateManager {
         slots.push({
           id: providerId,
           displayName: getProviderLabel(resolvedConfig),
-          kind: resolvedConfig.kind,
+          type: resolvedConfig.type,
           configured: true,
           apiKeyConfigured: Boolean(resolvedConfig.api_key),
           baseUrl: resolvedConfig.base_url,
@@ -271,7 +271,7 @@ export class ModalsStateManager {
         slots.push({
           id: providerId,
           displayName: preset.displayName,
-          kind: preset.kind,
+          type: preset.type,
           configured: false,
           apiKeyConfigured: false,
           baseUrl: preset.baseUrl,
@@ -288,7 +288,7 @@ export class ModalsStateManager {
       slots.push({
         id: providerId,
         displayName: getProviderLabel(resolvedConfig),
-        kind: resolvedConfig.kind,
+        type: resolvedConfig.type,
         configured: true,
         apiKeyConfigured: Boolean(resolvedConfig.api_key),
         baseUrl: resolvedConfig.base_url,
@@ -384,6 +384,7 @@ export class ModalsStateManager {
   createProviderFormState(providerSlot: ProviderSlot): ProviderFormState {
     const values = normalizeProviderFormValues({
       id: providerSlot.id,
+      type: providerSlot.type,
       api_key: providerSlot.resolved?.api_key || '',
       base_url: providerSlot.resolved?.base_url || providerSlot.baseUrl || '',
       model: providerSlot.resolved?.model || providerSlot.model || '',
@@ -400,34 +401,29 @@ export class ModalsStateManager {
   private getProviderFormConfig(providerId: string, values: Record<string, string>, previousProvider?: ProviderConfig): ProviderConfig {
     const preset = getPresetProviderMeta(providerId);
     if (preset) {
-      if (preset.kind === 'custom') {
-        const nextModel = values.model.trim() || preset.defaultModel;
-        const nextModels = Array.from(new Set([
-          nextModel,
-          ...(previousProvider?.models || []),
-          previousProvider?.model || '',
-        ].map(item => item.trim()).filter(Boolean)));
+      // Preset provider: type is fixed, base_url is preset default (editable)
+      const nextModel = values.model.trim() || previousProvider?.model || preset.defaultModel;
+      const nextModels = Array.from(new Set([
+        nextModel,
+        ...(previousProvider?.models || []),
+      ].map(item => item.trim()).filter(Boolean)));
 
-        return {
-          kind: preset.kind,
-          api_key: values.api_key.trim() || undefined,
-          base_url: values.base_url.trim() || preset.baseUrl,
-          model: nextModel,
-          models: nextModels.length > 0 ? nextModels : undefined,
-        };
-      }
       return {
-        kind: preset.kind,
+        type: preset.type,
         api_key: values.api_key.trim() || undefined,
-        base_url: preset.baseUrl,
-        model: previousProvider?.model || preset.defaultModel,
-        models: previousProvider?.models,
+        base_url: values.base_url.trim() || preset.baseUrl,
+        model: nextModel,
+        models: nextModels.length > 0 ? nextModels : undefined,
       };
     }
 
+    // Custom provider
     const nextModel = values.model.trim();
     if (!values.id.trim()) {
       throw new Error('Provider name is required for custom providers.');
+    }
+    if (!values.type || (values.type !== 'openai-compatible' && values.type !== 'anthropic-compatible')) {
+      throw new Error('Provider type must be "openai-compatible" or "anthropic-compatible".');
     }
     if (!values.base_url.trim()) {
       throw new Error('Base URL is required for custom providers.');
@@ -443,7 +439,7 @@ export class ModalsStateManager {
     ].map(item => item.trim()).filter(Boolean)));
 
     return {
-      kind: 'custom',
+      type: values.type as ProviderType,
       api_key: values.api_key.trim() || undefined,
       base_url: values.base_url.trim(),
       model: nextModel,
@@ -506,25 +502,22 @@ export class ModalsStateManager {
         await this.host.runtime.switchProvider(newId, false);
       }
 
-      if (!isPresetProviderId(newId)) {
-        try {
-          const fetchedModels = await fetchAvailableModels(resolveProviderConfig(this.host.config, newId));
-          if (fetchedModels.length > 0) {
-            const currentModel = this.host.config.providers[newId].model;
-            const orderedModels = currentModel && fetchedModels.includes(currentModel)
-              ? [currentModel, ...fetchedModels.filter(model => model !== currentModel)]
-              : fetchedModels;
-            this.host.config.providers[newId].models = orderedModels;
-            this.host.config.providers[newId].model = orderedModels[0];
-            this.host.state.providerModalNotice = `Fetched ${fetchedModels.length} models for ${getProviderLabel(resolveProviderConfig(this.host.config, newId))}.`;
-          } else {
-            this.host.state.providerModalNotice = `Saved provider. No models were returned for ${getProviderPlaceholderLabel(newId)}.`;
-          }
-        } catch (error) {
-          this.host.state.providerModalNotice = `Saved provider. Failed to refresh models: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      // Fetch models for all providers (preset and custom)
+      try {
+        const fetchedModels = await fetchAvailableModels(resolveProviderConfig(this.host.config, newId));
+        if (fetchedModels.length > 0) {
+          const currentModel = this.host.config.providers[newId].model;
+          const orderedModels = currentModel && fetchedModels.includes(currentModel)
+            ? [currentModel, ...fetchedModels.filter(model => model !== currentModel)]
+            : fetchedModels;
+          this.host.config.providers[newId].models = orderedModels;
+          this.host.config.providers[newId].model = orderedModels[0];
+          this.host.state.providerModalNotice = `Fetched ${fetchedModels.length} models for ${getProviderLabel(resolveProviderConfig(this.host.config, newId))}.`;
+        } else {
+          this.host.state.providerModalNotice = `Saved provider. No models were returned for ${getProviderPlaceholderLabel(newId)}.`;
         }
-      } else {
-        this.host.state.providerModalNotice = `Saved ${newId}.`;
+      } catch (error) {
+        this.host.state.providerModalNotice = `Saved provider. Failed to refresh models: ${error instanceof Error ? error.message : 'Unknown error'}`;
       }
 
       await this.host.runtime.persistConfig();
@@ -691,7 +684,7 @@ export class ModalsStateManager {
     }
 
     this.host.config.providers[trimmedName] = {
-      kind: 'custom',
+      type: 'openai-compatible',
       api_key: '',
       base_url: 'http://localhost:8080/v1',
       model: 'llama3',

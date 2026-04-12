@@ -13,6 +13,7 @@ import {
 import {
   sessionsVisibleLineCount,
 } from "../input-utils";
+import type { ProviderType } from '../config';
 import type { MutableBoxNode, MutableTextNode, MutableInputNode } from "./tui-types";
 
 const providerModalVisibleItems = 8;
@@ -21,7 +22,7 @@ const providerModalVisibleModels = 8;
 export interface ProviderFormField {
   key: string;
   label: string;
-  kind: 'text';
+  kind: 'text' | 'select';
 }
 
 export interface ProviderFormState {
@@ -40,7 +41,7 @@ export interface FilterState {
 export interface ProviderSlot {
   id: string;
   displayName: string;
-  kind: 'openai' | 'anthropic' | 'openrouter' | 'custom';
+  type: ProviderType;
   configured: boolean;
   apiKeyConfigured: boolean;
   baseUrl?: string;
@@ -139,6 +140,22 @@ export function formatProviderFormTextValue(value: string, cursorOffset: number,
   return [white(value)];
 }
 
+const providerTypeOptions: string[] = ['openai-compatible', 'anthropic-compatible'];
+
+export function formatProviderFormSelectValue(value: string, focused: boolean): any[] {
+  const chunks: any[] = [];
+  providerTypeOptions.forEach((option, i) => {
+    if (i > 0) chunks.push(white(' | '));
+    const isActive = focused && value === option;
+    if (isActive) {
+      chunks.push(bgWhite(black(` ${option} `)));
+    } else {
+      chunks.push(value === option ? white(`[${option}]`) : white(option));
+    }
+  });
+  return chunks;
+}
+
 export function formatFilterValue(value: string, cursorOffset: number, active: boolean): any[] {
   if (!active && value.length === 0) {
     return [white('(type to filter)')];
@@ -181,7 +198,9 @@ export function renderProviderModal(ctx: ModalRenderContext): void {
       const marker = index === formState.activeFieldIndex ? '> ' : '  ';
       const label = field.label.padEnd(14);
       const isFocused = index === formState.activeFieldIndex;
-      const valueChunks = formatProviderFormTextValue(rawValue, formState.cursorOffset, isFocused);
+      const valueChunks = field.kind === 'select'
+        ? formatProviderFormSelectValue(rawValue, isFocused)
+        : formatProviderFormTextValue(rawValue, formState.cursorOffset, isFocused);
 
       chunks.push(white(marker));
       chunks.push(white(label));

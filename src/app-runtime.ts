@@ -102,7 +102,7 @@ export async function initializeRuntime(options: RunAppOptions): Promise<{
     switch (providerType) {
       case 'openai-compatible':
         return convertToOpenAITools(tools);
-      case 'anthropic':
+      case 'anthropic-compatible':
         return convertToAnthropicTools(tools);
       default:
         return [];

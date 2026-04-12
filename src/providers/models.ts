@@ -2,11 +2,10 @@ import OpenAI from 'openai';
 import type { ResolvedProviderConfig } from '../config';
 
 export async function fetchAvailableModels(config: ResolvedProviderConfig): Promise<string[]> {
-  switch (config.kind) {
-    case 'openai':
-    case 'openrouter':
+  switch (config.type) {
+    case 'openai-compatible':
       return fetchOpenAICompatibleModels(config);
-    case 'anthropic':
+    case 'anthropic-compatible':
       return fetchAnthropicModels(config);
     default:
       return [];

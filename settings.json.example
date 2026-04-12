@@ -3,28 +3,24 @@
   "allowExecute": true,
   "providers": {
     "openai": {
-      "kind": "openai",
-      "display_name": "OpenAI",
+      "type": "openai-compatible",
       "api_key": "sk-your-openai-key",
       "base_url": "https://api.openai.com/v1",
       "model": "gpt-4o"
     },
     "anthropic": {
-      "kind": "anthropic",
-      "display_name": "Anthropic",
+      "type": "anthropic-compatible",
       "api_key": "sk-ant-your-anthropic-key",
       "model": "claude-sonnet-4-20250514"
     },
     "openrouter": {
-      "kind": "openrouter",
-      "display_name": "OpenRouter",
+      "type": "openai-compatible",
       "api_key": "sk-or-your-openrouter-key",
       "base_url": "https://openrouter.ai/api/v1",
       "model": "openai/gpt-4o-mini"
     },
     "custom-1": {
-      "kind": "custom",
-      "display_name": "Company Gateway",
+      "type": "openai-compatible",
       "api_key": "sk-your-company-key",
       "base_url": "https://llm.example.com/v1",
       "model": "gpt-4.1-mini",

@@ -1,6 +1,7 @@
 import type { KeyEvent } from "@opentui/core";
 import type { SessionStorage } from "./session";
 import type { TokenUsage } from "./providers/base";
+import type { ProviderType } from './config';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -37,13 +38,9 @@ export const approvalActions = [
 export type ApprovalActionKey = typeof approvalActions[number]['key'];
 
 export const presetProviderMeta = [
-  { id: 'openai', displayName: 'OpenAI', kind: 'openai' as const, baseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o' },
-  { id: 'anthropic', displayName: 'Anthropic', kind: 'anthropic' as const, baseUrl: 'https://api.anthropic.com', defaultModel: 'claude-sonnet-4-20250514' },
-  { id: 'openrouter', displayName: 'OpenRouter', kind: 'openrouter' as const, baseUrl: 'https://openrouter.ai/api/v1', defaultModel: 'openai/gpt-4o-mini' },
-  { id: 'ollama', displayName: 'Ollama', kind: 'custom' as const, baseUrl: 'http://localhost:11434/v1', defaultModel: 'llama3' },
-  { id: 'llama.cpp', displayName: 'Llama.cpp', kind: 'custom' as const, baseUrl: 'http://localhost:8080/v1', defaultModel: 'llama3' },
-  { id: 'vllm', displayName: 'vLLM', kind: 'custom' as const, baseUrl: 'http://localhost:8000/v1', defaultModel: 'llama3' },
-  { id: 'sglang', displayName: 'SGLang', kind: 'custom' as const, baseUrl: 'http://localhost:8080/v1', defaultModel: 'llama3' },
+  { id: 'openai', displayName: 'OpenAI', type: 'openai-compatible' as ProviderType, baseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o' },
+  { id: 'anthropic', displayName: 'Anthropic', type: 'anthropic-compatible' as ProviderType, baseUrl: 'https://api.anthropic.com', defaultModel: 'claude-sonnet-4-20250514' },
+  { id: 'openrouter', displayName: 'OpenRouter', type: 'openai-compatible' as ProviderType, baseUrl: 'https://openrouter.ai/api/v1', defaultModel: 'openai/gpt-4o-mini' },
 ] as const;
 
 export const promptAccentBorderChars = {

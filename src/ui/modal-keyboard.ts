@@ -75,7 +75,7 @@ export interface ModalKeyboardContext {
   saveProviderForm(): Promise<void>;
   insertProviderFormText(text: string): void;
   deleteProviderFormText(): void;
-  getVisibleProviderFormFields(providerId: string): Array<{ key: string }>;
+  getVisibleProviderFormFields(providerId: string): Array<{ key: string; kind: string }>;
   moveAddModelCursor(delta: number): void;
   deleteAddModelChar(): void;
   insertAddModelChar(char: string): void;
@@ -85,6 +85,23 @@ export interface ModalKeyboardContext {
 }
 
 // ── Provider modal keyboard handler ─────────────────────────────────────────
+
+const providerTypeOptions: string[] = ['openai-compatible', 'anthropic-compatible'];
+
+function cycleProviderFormSelectValue(
+  ctx: ModalKeyboardContext,
+  formState: { providerId: string; activeFieldIndex: number; values: Record<string, string> },
+  delta: number,
+): void {
+  const visibleFields = ctx.getVisibleProviderFormFields(formState.providerId || '');
+  const currentField = visibleFields[formState.activeFieldIndex];
+  if (!currentField || currentField.key !== 'type') return;
+
+  const currentValue = formState.values['type'] || 'openai-compatible';
+  const currentIndex = providerTypeOptions.indexOf(currentValue);
+  const nextIndex = currentIndex < 0 ? 0 : ((currentIndex + delta + providerTypeOptions.length) % providerTypeOptions.length);
+  formState.values['type'] = providerTypeOptions[nextIndex];
+}
 
 export async function handleProviderModalKey(ctx: ModalKeyboardContext, sequence: string): Promise<boolean> {
   if (!ctx.providerModalOpen) return false;
@@ -109,63 +126,87 @@ export async function handleProviderModalKey(ctx: ModalKeyboardContext, sequence
       await ctx.saveProviderForm();
       return true;
     }
-    if (isArrowLeft(sequence)) {
-      ctx.moveProviderFormCursor(-1);
-      return true;
-    }
-    if (isArrowRight(sequence) || sequence === ' ') {
-      if (sequence === ' ') {
-        ctx.insertProviderFormText(' ');
+
+    // Check if current field is a select field
+    const visibleFields = ctx.getVisibleProviderFormFields(formState.providerId);
+    const currentField = visibleFields[formState.activeFieldIndex];
+    const isSelectField = currentField && currentField.kind === 'select';
+
+    if (isSelectField) {
+      // For select fields, left/right cycle through options
+      if (isArrowLeft(sequence) || isArrowRight(sequence)) {
+        cycleProviderFormSelectValue(ctx, formState, isArrowLeft(sequence) ? -1 : 1);
         ctx.renderProviderModal();
-      } else {
-        ctx.moveProviderFormCursor(1);
+        return true;
       }
-      return true;
-    }
-    if (isCtrlA(sequence)) {
-      formState.cursorOffset = 0;
-      ctx.renderProviderModal();
-      return true;
-    }
-    if (isCtrlE(sequence)) {
-      const fs = ctx.getProviderFormState()!;
-      const visibleFields = ctx.getVisibleProviderFormFields(fs.providerId);
-      const currentField = visibleFields[fs.activeFieldIndex];
-      if (currentField) {
-        fs.cursorOffset = (fs.values[currentField.key] || '').length;
+      // Ignore text input for select fields
+      const char = getChar(sequence);
+      if (char !== null && char.charCodeAt(0) >= 32) return true;
+      if (isBackspace(sequence)) return true;
+      if (isCtrlA(sequence) || isCtrlE(sequence) || isCtrlU(sequence)) return true;
+      if (sequence === ' ') return true;
+    } else {
+      // Normal text field behavior
+      if (isArrowLeft(sequence)) {
+        ctx.moveProviderFormCursor(-1);
+        return true;
+      }
+      if (isArrowRight(sequence) || sequence === ' ') {
+        if (sequence === ' ') {
+          ctx.insertProviderFormText(' ');
+          ctx.renderProviderModal();
+        } else {
+          ctx.moveProviderFormCursor(1);
+        }
+        return true;
+      }
+      if (isCtrlA(sequence)) {
+        formState.cursorOffset = 0;
         ctx.renderProviderModal();
+        return true;
       }
-      return true;
-    }
-    if (isCtrlU(sequence)) {
-      const fs = ctx.getProviderFormState()!;
-      const visibleFields = ctx.getVisibleProviderFormFields(fs.providerId);
-      const currentField = visibleFields[fs.activeFieldIndex];
-      if (currentField) {
-        const currentValue = fs.values[currentField.key] || '';
-        fs.values[currentField.key] = currentValue.slice(fs.cursorOffset);
-        fs.cursorOffset = 0;
+      if (isCtrlE(sequence)) {
+        const fs = ctx.getProviderFormState()!;
+        const visibleFields = ctx.getVisibleProviderFormFields(fs.providerId);
+        const currentField = visibleFields[fs.activeFieldIndex];
+        if (currentField) {
+          fs.cursorOffset = (fs.values[currentField.key] || '').length;
+          ctx.renderProviderModal();
+        }
+        return true;
+      }
+      if (isCtrlU(sequence)) {
+        const fs = ctx.getProviderFormState()!;
+        const visibleFields = ctx.getVisibleProviderFormFields(fs.providerId);
+        const currentField = visibleFields[fs.activeFieldIndex];
+        if (currentField) {
+          const currentValue = fs.values[currentField.key] || '';
+          fs.values[currentField.key] = currentValue.slice(fs.cursorOffset);
+          fs.cursorOffset = 0;
+          ctx.renderProviderModal();
+        }
+        return true;
+      }
+      if (isBackspace(sequence)) {
+        ctx.deleteProviderFormText();
         ctx.renderProviderModal();
+        return true;
       }
-      return true;
+      {
+        const char = getChar(sequence);
+        if (char !== null && char.charCodeAt(0) >= 32) {
+          ctx.insertProviderFormText(char);
+          ctx.renderProviderModal();
+          return true;
+        }
+      }
     }
+
     if (isEnter(sequence)) {
       await ctx.saveProviderForm();
       return true;
     }
-    if (isBackspace(sequence)) {
-      ctx.deleteProviderFormText();
-      ctx.renderProviderModal();
-      return true;
-    }
-    {
-      const char = getChar(sequence);
-      if (char !== null && char.charCodeAt(0) >= 32) {
-        ctx.insertProviderFormText(char);
-        ctx.renderProviderModal();
-        return true;
-      }
-    }
+
     if (sequence.length > 1 && !sequence.includes('\x1b')) {
       return true;
     }

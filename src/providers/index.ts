@@ -11,7 +11,7 @@ export async function createProviderFromConfig(config: ResolvedProviderConfig): 
   switch (config.type) {
     case 'openai-compatible':
       return new OpenAIProvider(config, config.id, config.id);
-    case 'anthropic':
+    case 'anthropic-compatible':
       return new AnthropicProvider(config, config.id, config.id);
     default:
       throw new Error(`Unknown provider type: ${String(config.type)}`);

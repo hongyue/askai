@@ -2,12 +2,10 @@ import { mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 
-export type ProviderType = 'openai-compatible' | 'anthropic';
-export type ProviderDeployment = 'hosted' | 'self-hosted';
-export type ProviderKind = 'openai' | 'openrouter' | 'anthropic' | 'custom';
+export type ProviderType = 'openai-compatible' | 'anthropic-compatible';
 
 export interface ProviderConfig {
-  kind?: ProviderKind;
+  type?: ProviderType;
   api_key?: string;
   model: string;
   models?: string[];
@@ -16,9 +14,7 @@ export interface ProviderConfig {
 
 export interface ResolvedProviderConfig extends ProviderConfig {
   id: string;
-  kind: ProviderKind;
   type: ProviderType;
-  deployment: ProviderDeployment;
   api_key: string;
 }
 
@@ -41,7 +37,19 @@ export interface Config {
   };
 }
 
-export const presetProviderIds = ['openai', 'anthropic', 'openrouter', 'ollama', 'llama.cpp', 'vllm', 'sglang'] as const;
+export const presetProviderIds = ['openai', 'anthropic', 'openrouter'] as const;
+
+const presetProviderTypes: Record<typeof presetProviderIds[number], ProviderType> = {
+  openai: 'openai-compatible',
+  anthropic: 'anthropic-compatible',
+  openrouter: 'openai-compatible',
+};
+
+const presetProviderBaseUrls: Record<typeof presetProviderIds[number], string> = {
+  openai: 'https://api.openai.com/v1',
+  anthropic: 'https://api.anthropic.com',
+  openrouter: 'https://openrouter.ai/api/v1',
+};
 
 // Normalize provider ID for case-insensitive comparison
 export function normalizeProviderId(id: string): string {
@@ -107,27 +115,6 @@ const DEFAULT_CONFIG_PATH = join(homedir(), '.askai', 'settings.json');
 
 const DEFAULT_SYSTEM_PROMPT = `You are a helpful terminal assistant. When suggesting shell commands, use bash code blocks. Explain what commands do before suggesting them. Be concise.`;
 
-const legacyProviderDefaults: Record<string, { kind: ProviderKind; type: ProviderType; deployment: ProviderDeployment; base_url?: string }> = {
-  openai: {
-    kind: 'openai',
-    type: 'openai-compatible',
-    deployment: 'hosted',
-    base_url: 'https://api.openai.com/v1',
-  },
-  openrouter: {
-    kind: 'openrouter',
-    type: 'openai-compatible',
-    deployment: 'hosted',
-    base_url: 'https://openrouter.ai/api/v1',
-  },
-  anthropic: {
-    kind: 'anthropic',
-    type: 'anthropic',
-    deployment: 'hosted',
-    base_url: 'https://api.anthropic.com',
-  },
-};
-
 export async function loadConfig(configPath?: string): Promise<Config> {
   const path = configPath || DEFAULT_CONFIG_PATH;
 
@@ -170,6 +157,35 @@ export function listResolvedProviders(config: Config): ResolvedProviderConfig[] 
   return listProviderIds(config).map(providerId => resolveProviderConfig(config, providerId));
 }
 
+function resolveProviderType(providerId: string, providerConfig: ProviderConfig): ProviderType {
+  // If explicitly set in config, use it
+  if (providerConfig.type) return providerConfig.type;
+
+  // For preset providers, derive from the preset map
+  const normalizedId = normalizeProviderId(providerId);
+  for (const presetId of presetProviderIds) {
+    if (normalizeProviderId(presetId) === normalizedId) {
+      return presetProviderTypes[presetId];
+    }
+  }
+
+  // Default for custom providers
+  return 'openai-compatible';
+}
+
+function resolveProviderBaseUrl(providerId: string, providerConfig: ProviderConfig): string {
+  if (providerConfig.base_url) return providerConfig.base_url;
+
+  const normalizedId = normalizeProviderId(providerId);
+  for (const presetId of presetProviderIds) {
+    if (normalizeProviderId(presetId) === normalizedId) {
+      return presetProviderBaseUrls[presetId];
+    }
+  }
+
+  throw new Error(`Provider "${providerId}" is missing base_url`);
+}
+
 export function resolveProviderConfig(config: Config, providerId?: string): ResolvedProviderConfig {
   const id = providerId || config.provider;
   const providerConfig = config.providers[id];
@@ -178,12 +194,9 @@ export function resolveProviderConfig(config: Config, providerId?: string): Reso
     throw new Error(`Provider "${id}" is not configured`);
   }
 
-  const inferredDefaults = inferProviderDefaults(id, providerConfig);
-  const kind = providerConfig.kind || inferredDefaults.kind;
-  const type = inferredDefaults.type;
-  const deployment = inferredDefaults.deployment;
+  const type = resolveProviderType(id, providerConfig);
 
-  if (type === 'anthropic') {
+  if (type === 'anthropic-compatible') {
     if (!providerConfig.api_key || typeof providerConfig.api_key !== 'string') {
       throw new Error(`Provider "${id}" is missing api_key`);
     }
@@ -193,11 +206,9 @@ export function resolveProviderConfig(config: Config, providerId?: string): Reso
     return {
       ...providerConfig,
       id,
-      kind,
       type,
-      deployment,
       api_key: providerConfig.api_key,
-      base_url: providerConfig.base_url || inferredDefaults.base_url,
+      base_url: resolveProviderBaseUrl(id, providerConfig),
     };
   }
 
@@ -205,16 +216,8 @@ export function resolveProviderConfig(config: Config, providerId?: string): Reso
     throw new Error(`Provider "${id}" is missing model`);
   }
 
-  const baseUrl = providerConfig.base_url || inferredDefaults.base_url;
-  if (!baseUrl || typeof baseUrl !== 'string') {
-    throw new Error(`Provider "${id}" is missing base_url`);
-  }
-
+  const baseUrl = resolveProviderBaseUrl(id, providerConfig);
   let apiKey = providerConfig.api_key;
-  if ((!apiKey || typeof apiKey !== 'string') && deployment === 'hosted') {
-    throw new Error(`Provider "${id}" is missing api_key`);
-  }
-
   if (!apiKey || typeof apiKey !== 'string') {
     apiKey = '';
   }
@@ -222,9 +225,7 @@ export function resolveProviderConfig(config: Config, providerId?: string): Reso
   return {
     ...providerConfig,
     id,
-    kind,
     type,
-    deployment,
     api_key: apiKey,
     base_url: baseUrl,
   };
@@ -234,13 +235,14 @@ export function createProviderConfig(
   providerId: string,
   input: ProviderConfig,
 ): ProviderConfig {
-  const inferredDefaults = inferProviderDefaults(providerId, input);
+  const type = input.type || resolveProviderType(providerId, input);
   const normalizedModels = normalizeModels(input.models, input.model);
+  const baseUrl = input.base_url?.trim() || resolveProviderBaseUrl(providerId, input);
 
   return {
-    kind: input.kind || inferredDefaults.kind,
+    type,
     api_key: typeof input.api_key === 'string' ? input.api_key : undefined,
-    base_url: input.base_url?.trim() || inferredDefaults.base_url,
+    base_url: baseUrl || undefined,
     model: input.model.trim(),
     models: normalizedModels.length > 0 ? normalizedModels : undefined,
   };
@@ -344,15 +346,15 @@ function validateConfig(config: unknown): Config {
       throw new Error(`Invalid config: provider "${providerId}" missing model`);
     }
 
-    sourceProviders[providerId] = createProviderConfig(providerId, {
-      kind: providerConfig.kind as ProviderKind | undefined,
+    sourceProviders[providerId] = {
+      type: providerConfig.type as ProviderType | undefined,
       api_key: providerConfig.api_key as string | undefined,
       model: providerConfig.model,
       models: Array.isArray(providerConfig.models)
         ? providerConfig.models.filter((model): model is string => typeof model === 'string')
         : undefined,
       base_url: providerConfig.base_url as string | undefined,
-    });
+    };
   }
   const { providers, activeProviderId } = normalizeProviders(sourceProviders, cfg.provider as string);
 
@@ -427,62 +429,7 @@ function findPresetSourceProviderId(sourceProviders: Record<string, ProviderConf
     }
   }
 
-  // Fallback: match by kind
-  return Object.keys(sourceProviders).find(sourceId => {
-    const sourceConfig = sourceProviders[sourceId];
-    return sourceConfig.kind === presetId;
-  });
-}
-
-function inferProviderDefaults(providerId: string, providerConfig: ProviderConfig): {
-  kind: ProviderKind;
-  type: ProviderType;
-  deployment: ProviderDeployment;
-  base_url?: string;
-} {
-  if (providerConfig.kind) {
-    switch (providerConfig.kind) {
-      case 'openai':
-        return legacyProviderDefaults.openai;
-      case 'openrouter':
-        return legacyProviderDefaults.openrouter;
-      case 'anthropic':
-        return legacyProviderDefaults.anthropic;
-      case 'custom':
-      default:
-        return {
-          kind: 'custom',
-          type: 'openai-compatible',
-          deployment: providerConfig.base_url ? 'self-hosted' : 'hosted',
-          base_url: providerConfig.base_url,
-        };
-    }
-  }
-
-  const legacyDefaults = legacyProviderDefaults[providerId];
-  if (legacyDefaults) {
-    return legacyDefaults;
-  }
-
-  return {
-    kind: 'custom',
-    type: 'openai-compatible',
-    deployment: providerConfig.base_url ? 'self-hosted' : 'hosted',
-    base_url: providerConfig.base_url,
-  };
-}
-
-function inferKindFromProviderId(providerId: string, baseUrl?: string): ProviderKind {
-  if (providerId === 'openai' || baseUrl === 'https://api.openai.com/v1') {
-    return 'openai';
-  }
-  if (providerId === 'openrouter' || baseUrl === 'https://openrouter.ai/api/v1') {
-    return 'openrouter';
-  }
-  if (providerId === 'anthropic' || baseUrl === 'https://api.anthropic.com') {
-    return 'anthropic';
-  }
-  return 'custom';
+  return undefined;
 }
 
 export function normalizeModels(models?: string[], currentModel?: string): string[] {
