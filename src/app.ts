@@ -1422,7 +1422,7 @@ export class TUIApp {
   }
 
   private async executeCommand(cmd: Command, args: string[] = [], rawInput?: string) {
-    this.chatManager.addUserMsg(rawInput || `/${cmd.name}`);
+    // this.chatManager.addUserMsg(rawInput || `/${cmd.name}`);
     if (cmd.name === 'exit' || cmd.name === 'quit') {
       this.deleteEmptySessions();
       if (this.runtime.mcpManager) await this.runtime.mcpManager.disconnectAll();
@@ -1431,8 +1431,14 @@ export class TUIApp {
     }
     try {
       const result = await cmd.action(args);
-      if (result) { this.chatManager.addMsg(result, '#888888'); }
-      else { this.chatManager.addMsg(`Executed /${cmd.name}`, '#888888'); }
+      if (result) { 
+        switch (cmd.name) {
+          case 'command-execute':
+            this.chatManager.addMsg(result, '#888888');
+            break;
+        }
+      }
+      // else { this.chatManager.addMsg(`Executed /${cmd.name}`, '#888888'); }
     } catch (error) {
       this.chatManager.addMsg(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`, '#ff4444');
     }
