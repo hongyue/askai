@@ -110,7 +110,6 @@ import { McpManager, type IMcpHost, createMcpState, type McpState } from './ui/m
 import { ApprovalManager, type IApprovalHost, createApprovalState, type ApprovalState, type ActiveShellCommand } from './ui/approval';
 import { ChatManager, type IChatHost, createChatState, type ChatState } from './ui/chat';
 import { ModalsStateManager, type IModalsHost, createModalsState, type ModalsState, formatRelativeTime, ProviderSlot, getVisibleProviderFormFields } from './ui/modals-state';
-import { createTopicBrowserState, TopicBrowserManager } from './ui/topics';
 import type { MutableBoxNode, MutableTextNode, MutableInputNode } from './ui/tui-types';
 
 interface PaletteState {
@@ -160,18 +159,11 @@ export class TUIApp {
   private palette: PaletteState = { open: false, query: '', selectedIndex: 0, matches: [] };
   private activeShellCommand: ActiveShellCommand | null = null;
 
-  // Topics browser
-  private topicsState: import('./ui/topics').TopicBrowserState | null = null;
-
   // UI nodes
   private chatNode!: MutableBoxNode;
   private chatNodeIds: string[] = [];
   private cmdListBoxNode!: MutableBoxNode;
   private cmdListTextNode!: MutableTextNode;
-  private topicsModalNode!: MutableBoxNode;
-  private topicsModalHeader!: MutableTextNode;
-  private topicsModalScroll!: MutableBoxNode;
-  private topicsModalText!: MutableTextNode;
   private statusBarTextNode!: MutableTextNode;
   private statusBarStatsNode!: MutableTextNode;
   private headerTextNode!: MutableTextNode;
@@ -232,7 +224,6 @@ export class TUIApp {
           const nodeId = this.chatNodeIds.pop();
           if (nodeId) this.chatNode.remove(nodeId);
         }
-        this.closeTopicsModal();
         this.root.requestRender();
       },
       () => { this.openMcpModal(); },
@@ -241,14 +232,12 @@ export class TUIApp {
       async () => {
         this.chatState.currentSession = this.runtime.startNewSession();
         this.chatManager.clearAllMessages();
-        this.closeTopicsModal();
         this.renderHeader();
         this.renderStatusBar();
         this.root.requestRender();
         return 'Started new session';
       },
       () => { this.openSessionsModal(); },
-      async (args) => this.handleTopicsCommand(args),
     );
     this.commands = commands;
     this.palette.matches = [...commands];
@@ -502,20 +491,6 @@ export class TUIApp {
     const sessionsModalText = Text({ id: 'sessions-modal-text', content: stringToStyledText(''), fg: '#d8d8d8' });
     sessionsModal.add(sessionsModalText);
 
-    // Topics browser (bottom-right scrollable panel)
-    const topicsModal = Box({
-      id: 'topics-modal', position: 'absolute', width: '36%', right: 2, bottom: 6,
-      height: 'auto', maxHeight: 20, backgroundColor: '#1a1a1a', padding: 1,
-      border: true, borderColor: '#ffaa00', visible: false,
-      flexDirection: 'column',
-    });
-    const topicsModalHeader = Text({ id: 'topics-modal-header', content: stringToStyledText(''), fg: '#d8d8d8' });
-    const topicsModalScroll = ScrollBox({ id: 'topics-modal-scroll', width: '100%', flexGrow: 1, scrollY: true, stickyScroll: false, paddingX: 0, marginY: 1 });
-    const topicsModalText = Text({ id: 'topics-modal-text', content: stringToStyledText(''), fg: '#d8d8d8' });
-    topicsModalScroll.add(topicsModalText);
-    topicsModal.add(topicsModalHeader);
-    topicsModal.add(topicsModalScroll);
-
     const inputRow = Box({ id: 'input-row', width: '100%', height: 'auto', flexShrink: 0, flexDirection: 'row', backgroundColor: '#1f1f1f', paddingLeft: 0, paddingRight: 1 });
     inputRow.add(Box({ width: 2, height: '100%', flexDirection: 'column', backgroundColor: '#1f1f1f', border: false }).add(Text({ content: '>', fg: '#00d4ff' })));
     const input = h(TextareaRenderable, {
@@ -539,7 +514,6 @@ export class TUIApp {
     root.add(mcpDetailsModal);
     root.add(providerModal);
     root.add(modelModal);
-    root.add(topicsModal);
     root.add(sessionsModal);
     renderer.root.add(root);
   }
@@ -549,10 +523,6 @@ export class TUIApp {
 
     this.cmdListBoxNode = find('cmd-list-box') as unknown as MutableBoxNode;
     this.cmdListTextNode = find('command-palette') as unknown as MutableTextNode;
-    this.topicsModalNode = find('topics-modal') as unknown as MutableBoxNode;
-    this.topicsModalHeader = find('topics-modal-header') as unknown as MutableTextNode;
-    this.topicsModalScroll = find('topics-modal-scroll') as unknown as MutableBoxNode;
-    this.topicsModalText = find('topics-modal-text') as unknown as MutableTextNode;
     this.statusBarTextNode = find('status-bar-text') as unknown as MutableTextNode;
     this.statusBarStatsNode = find('status-bar-stats') as unknown as MutableTextNode;
     this.headerTextNode = find('header-text') as unknown as MutableTextNode;
@@ -581,7 +551,7 @@ export class TUIApp {
     this.root = this.renderer.root as unknown as BoxRenderable;
 
     // Validate
-    if (!this.cmdListBoxNode || !this.cmdListTextNode || !this.topicsModalNode || !this.topicsModalHeader || !this.topicsModalScroll || !this.topicsModalText || !this.statusBarTextNode || !this.statusBarStatsNode ||
+    if (!this.cmdListBoxNode || !this.cmdListTextNode || !this.statusBarTextNode || !this.statusBarStatsNode ||
         !this.headerTextNode || !this.inputNode || !this.chatNode || !this.approvalDialogNode || !this.approvalDialogTextNode ||
         !this.mcpModalNode || !this.mcpModalTextNode || !this.mcpDetailsModalNode || !this.mcpDetailsHeaderBox || !this.mcpDetailsHeaderText || !this.mcpDetailsScrollBox || !this.mcpDetailsModalTextNode || !this.mcpDetailsFooterBox || !this.mcpDetailsModalFooterTextNode ||
         !this.providerModalNode || !this.providerModalTextNode || !this.modelModalNode || !this.modelModalTitleTextNode ||
@@ -647,15 +617,6 @@ export class TUIApp {
         this.mcpUI.renderMcpDetailsModal();
       }
     };
-    this.topicsModalNode.onMouseScroll = (event) => {
-      if (!this.topicsState) return;
-      const direction = event.scroll?.direction;
-      if (direction === 'up') {
-        this.navigateTopicsUp();
-      } else if (direction === 'down') {
-        this.navigateTopicsDown();
-      }
-    };
   }
 
   private wireEventHandlers(): void {
@@ -714,13 +675,6 @@ export class TUIApp {
         return true;
       }
 
-      // Topics modal
-      if (this.topicsState) {
-        if (isCtrlC(sequence)) return false;
-        if (this.handleTopicsModalKey(sequence)) return true;
-        return true;
-      }
-
       // Approval dialog
       if (!this.approvalState.pendingExecution) return false;
       if (isCtrlC(sequence)) return false;
@@ -755,7 +709,7 @@ export class TUIApp {
     };
 
     renderer.prependInputHandler((sequence: string) => {
-      if (this.mcpState.mcpModalOpen || this.mcpState.mcpDetailsOpen || this.approvalState.pendingExecution || this.modalsState.providerModalOpen || this.modalsState.modelModalOpen || this.modalsState.sessionsModalOpen || this.topicsState) return false;
+      if (this.mcpState.mcpModalOpen || this.mcpState.mcpDetailsOpen || this.approvalState.pendingExecution || this.modalsState.providerModalOpen || this.modalsState.modelModalOpen || this.modalsState.sessionsModalOpen) return false;
       if (shiftEnterSequences.has(sequence)) { this.insertInputNewline(); return true; }
       if (sequence.length > 0 && !sequence.includes('\x1b') && this.inputNode) {
         const hasNonAscii = [...sequence].some(c => c.charCodeAt(0) > 127);
@@ -779,11 +733,6 @@ export class TUIApp {
           if (this.modalsState.modelModalOpen && this.modalsState.modelModalFocus === 'filter') {
             this.modalsManager.insertModelFilterText(key.sequence);
             this.renderModelModal();
-            return;
-          }
-          if (this.topicsState) {
-            this.getTopicsBrowser().insertFilterText(key.sequence);
-            this.renderTopicsModal();
             return;
           }
           if (this.inputNode && !this.mcpState.mcpModalOpen && !this.approvalState.pendingExecution && !this.modalsState.sessionsModalOpen) {
@@ -817,7 +766,6 @@ export class TUIApp {
       if ((this.modalsState.providerModalOpen || this.modalsState.modelModalOpen) && !key.ctrl && !key.meta) return;
       if (this.mcpState.mcpModalOpen && !key.ctrl && !key.meta) return;
       if (this.modalsState.sessionsModalOpen && !key.ctrl && !key.meta) return;
-      if (this.topicsState && !key.ctrl && !key.meta) return;
       if (this.approvalState.pendingExecution && !key.ctrl && !key.meta) return;
 
       this.applyKeyToBuffer(key);
@@ -844,7 +792,7 @@ export class TUIApp {
 
     // Paste handler
     this.renderer.keyInput.on('paste', (event) => {
-      if (!this.modalsState.providerModalOpen && !this.modalsState.modelModalOpen && !this.mcpState.mcpModalOpen && !this.approvalState.pendingExecution && !this.modalsState.sessionsModalOpen && !this.topicsState) {
+      if (!this.modalsState.providerModalOpen && !this.modalsState.modelModalOpen && !this.mcpState.mcpModalOpen && !this.approvalState.pendingExecution && !this.modalsState.sessionsModalOpen) {
         event.preventDefault();
         const text = new TextDecoder().decode(event.bytes);
         if (text && this.inputNode) { this.inputNode.insertText(text); this.inputBuffer = this.inputNode.plainText; }
@@ -891,13 +839,6 @@ export class TUIApp {
           this.modalsState.sessionsRenaming.cursorOffset += normalizedText.length;
           this.renderSessionsModal();
         }
-        return;
-      }
-      if (this.topicsState) {
-        event.preventDefault();
-        const text = new TextDecoder().decode(event.bytes);
-        this.getTopicsBrowser().insertFilterPaste(text);
-        this.renderTopicsModal();
         return;
       }
     });
@@ -996,127 +937,6 @@ export class TUIApp {
     if (!this.modalsState.providerModalOpen) {
       this.inputNode.focus();
     }
-  }
-
-  // ── Topics browser ─────────────────────────────────────────────────────
-
-  private topicsBrowser: TopicBrowserManager | null = null;
-
-  private getTopicsBrowser(): TopicBrowserManager {
-    if (!this.topicsBrowser) {
-      this.topicsBrowser = new TopicBrowserManager({
-        state: this.topicsState!,
-        messages: this.chatState.messages,
-        chatNodeIds: this.chatNodeIds,
-        chatNode: this.chatNode,
-        root: this.root,
-        topicsModalNode: this.topicsModalNode,
-        topicsModalHeader: this.topicsModalHeader,
-        topicsModalScroll: this.topicsModalScroll,
-        topicsModalText: this.topicsModalText,
-        inputNode: this.inputNode,
-      });
-    }
-    return this.topicsBrowser!;
-  }
-
-  private handleTopicsCommand(args: string[]): string {
-    const keyword = args.join(' ').trim();
-    if (!this.topicsState) {
-      this.topicsState = createTopicBrowserState();
-      this.topicsBrowser = null;
-    }
-    this.getTopicsBrowser().open(keyword);
-    return keyword ? `Opened topics: "${keyword}"` : 'Opened topics browser';
-  }
-
-  private closeTopicsModal(): void {
-    if (!this.topicsState) return;
-    this.getTopicsBrowser().close();
-    this.topicsState = null;
-    this.topicsBrowser = null; // invalidate cached manager
-  }
-
-  private navigateTopicsUp(): void {
-    if (!this.topicsState) return;
-    this.getTopicsBrowser().navigateUp();
-  }
-
-  private navigateTopicsDown(): void {
-    if (!this.topicsState) return;
-    this.getTopicsBrowser().navigateDown();
-  }
-
-  private async selectAndJumpTopics(): Promise<void> {
-    if (!this.topicsState) return;
-    this.getTopicsBrowser().selectAndJump();
-    this.topicsState = null;
-  }
-
-  private renderTopicsModal(): void {
-    if (!this.topicsState) return;
-    this.getTopicsBrowser().render();
-  }
-
-  private handleTopicsModalKey(sequence: string): boolean {
-    if (!this.topicsState) return false;
-    if (isEscape(sequence)) { this.closeTopicsModal(); return true; }
-    if (isEnter(sequence)) { void this.selectAndJumpTopics(); return true; }
-    if (isArrowUp(sequence)) { this.navigateTopicsUp(); return true; }
-    if (isArrowDown(sequence)) { this.navigateTopicsDown(); return true; }
-    if (sequence === '\x1b[5~' || sequence === '\x1b[5~') { this.pageTopicsUp(); return true; } // PgUp
-    if (sequence === '\x1b[6~' || sequence === '\x1b[6~') { this.pageTopicsDown(); return true; } // PgDn
-    // Filter text input (standard modal pattern)
-    if (isArrowLeft(sequence)) {
-      this.getTopicsBrowser().updateFilterValue(-1);
-      this.renderTopicsModal();
-      return true;
-    }
-    if (isArrowRight(sequence)) {
-      this.getTopicsBrowser().updateFilterValue(1);
-      this.renderTopicsModal();
-      return true;
-    }
-    if (isCtrlA(sequence)) {
-      this.topicsState.filter.cursorOffset = 0;
-      this.renderTopicsModal();
-      return true;
-    }
-    if (isCtrlE(sequence)) {
-      this.topicsState.filter.cursorOffset = this.topicsState.filter.value.length;
-      this.renderTopicsModal();
-      return true;
-    }
-    if (isCtrlU(sequence)) {
-      this.topicsState.filter.value = this.topicsState.filter.value.slice(this.topicsState.filter.cursorOffset);
-      this.topicsState.filter.cursorOffset = 0;
-      this.renderTopicsModal();
-      return true;
-    }
-    if (isBackspace(sequence)) {
-      this.getTopicsBrowser().deleteFilterText();
-      this.renderTopicsModal();
-      return true;
-    }
-    {
-      const char = getChar(sequence);
-      if (char !== null && char.charCodeAt(0) >= 32) {
-        this.getTopicsBrowser().insertFilterText(char);
-        this.renderTopicsModal();
-        return true;
-      }
-    }
-    return true;
-  }
-
-  private pageTopicsUp(): void {
-    if (!this.topicsState) return;
-    this.getTopicsBrowser().pageUp();
-  }
-
-  private pageTopicsDown(): void {
-    if (!this.topicsState) return;
-    this.getTopicsBrowser().pageDown();
   }
 
   // ── Rendering ──────────────────────────────────────────────────────────
@@ -1587,8 +1407,13 @@ export class TUIApp {
         // No matching command — fall through to send as message
       }
 
-      // Close topics modal on new user input
-      this.closeTopicsModal();
+      // Close modals on new user input
+      this.closeProviderModal();
+      this.closeModelModal();
+      this.closeSessionsModal();
+      this.closeMcpModal();
+      this.closeMcpDetailsModal();
+      
       this.resetInput();
       await this.chatManager.handleInput(text);
     } finally {

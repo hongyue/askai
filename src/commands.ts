@@ -23,7 +23,6 @@ export function createCommands(
   onModelCommand?: (args: string[]) => Promise<string | void>,
   onNewSession?: () => Promise<string | void>,
   onOpenSessionsModal?: () => void,
-  onTopicsCommand?: (args: string[]) => Promise<string | void>,
 ): Command[] {
   return [
     {
@@ -74,13 +73,6 @@ export function createCommands(
       description: 'clear the screen',
       action: () => {
         onClear?.();
-      },
-    },
-    {
-      name: 'topics',
-      description: 'browse user topics',
-      action: async (args) => {
-        return await onTopicsCommand?.(args);
       },
     },
     {
