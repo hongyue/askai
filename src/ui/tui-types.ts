@@ -15,6 +15,9 @@ export interface MutableBoxNode {
   requestRender(): void;
   onMouseDown?: ((event: { x: number; y: number }) => void) | undefined;
   onMouseScroll?: ((event: { scroll?: { direction?: string; delta?: number } }) => void) | undefined;
+  // ScrollBox methods (available when the node is a ScrollBox)
+  scrollTo?(position: number | { x: number; y: number }): void;
+  scrollChildIntoView?(childId: string): void;
 }
 
 export interface MutableInputNode {

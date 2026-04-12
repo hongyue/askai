@@ -110,6 +110,7 @@ import { McpManager, type IMcpHost, createMcpState, type McpState } from './ui/m
 import { ApprovalManager, type IApprovalHost, createApprovalState, type ApprovalState, type ActiveShellCommand } from './ui/approval';
 import { ChatManager, type IChatHost, createChatState, type ChatState } from './ui/chat';
 import { ModalsStateManager, type IModalsHost, createModalsState, type ModalsState, formatRelativeTime, ProviderSlot, getVisibleProviderFormFields } from './ui/modals-state';
+import { createTopicBrowserState, TopicBrowserManager } from './ui/topics';
 import type { MutableBoxNode, MutableTextNode, MutableInputNode } from './ui/tui-types';
 
 interface PaletteState {
@@ -159,11 +160,16 @@ export class TUIApp {
   private palette: PaletteState = { open: false, query: '', selectedIndex: 0, matches: [] };
   private activeShellCommand: ActiveShellCommand | null = null;
 
+  // Topics browser
+  private topicsState: import('./ui/topics').TopicBrowserState | null = null;
+
   // UI nodes
   private chatNode!: MutableBoxNode;
   private chatNodeIds: string[] = [];
   private cmdListBoxNode!: MutableBoxNode;
   private cmdListTextNode!: MutableTextNode;
+  private topicsModalNode!: MutableBoxNode;
+  private topicsModalText!: MutableTextNode;
   private statusBarTextNode!: MutableTextNode;
   private statusBarStatsNode!: MutableTextNode;
   private headerTextNode!: MutableTextNode;
@@ -224,6 +230,7 @@ export class TUIApp {
           const nodeId = this.chatNodeIds.pop();
           if (nodeId) this.chatNode.remove(nodeId);
         }
+        this.closeTopicsModal();
         this.root.requestRender();
       },
       () => { this.openMcpModal(); },
@@ -232,12 +239,14 @@ export class TUIApp {
       async () => {
         this.chatState.currentSession = this.runtime.startNewSession();
         this.chatManager.clearAllMessages();
+        this.closeTopicsModal();
         this.renderHeader();
         this.renderStatusBar();
         this.root.requestRender();
         return 'Started new session';
       },
       () => { this.openSessionsModal(); },
+      async (args) => this.handleTopicsCommand(args),
     );
     this.commands = commands;
     this.palette.matches = [...commands];
@@ -491,6 +500,16 @@ export class TUIApp {
     const sessionsModalText = Text({ id: 'sessions-modal-text', content: stringToStyledText(''), fg: '#d8d8d8' });
     sessionsModal.add(sessionsModalText);
 
+    // Topics browser (centered floating modal)
+    const topicsModal = Box({
+      id: 'topics-modal', position: 'absolute', width: '50%', left: '25%', top: '30%',
+      height: 18, backgroundColor: '#1a1a1a', padding: 1,
+      border: true, borderColor: '#ffaa00', visible: false,
+      flexDirection: 'column',
+    });
+    const topicsModalText = Text({ id: 'topics-modal-text', content: stringToStyledText(''), fg: '#d8d8d8' });
+    topicsModal.add(topicsModalText);
+
     const inputRow = Box({ id: 'input-row', width: '100%', height: 'auto', flexShrink: 0, flexDirection: 'row', backgroundColor: '#1f1f1f', paddingLeft: 0, paddingRight: 1 });
     inputRow.add(Box({ width: 2, height: '100%', flexDirection: 'column', backgroundColor: '#1f1f1f', border: false }).add(Text({ content: '>', fg: '#00d4ff' })));
     const input = h(TextareaRenderable, {
@@ -514,6 +533,7 @@ export class TUIApp {
     root.add(mcpDetailsModal);
     root.add(providerModal);
     root.add(modelModal);
+    root.add(topicsModal);
     root.add(sessionsModal);
     renderer.root.add(root);
   }
@@ -523,6 +543,8 @@ export class TUIApp {
 
     this.cmdListBoxNode = find('cmd-list-box') as unknown as MutableBoxNode;
     this.cmdListTextNode = find('command-palette') as unknown as MutableTextNode;
+    this.topicsModalNode = find('topics-modal') as unknown as MutableBoxNode;
+    this.topicsModalText = find('topics-modal-text') as unknown as MutableTextNode;
     this.statusBarTextNode = find('status-bar-text') as unknown as MutableTextNode;
     this.statusBarStatsNode = find('status-bar-stats') as unknown as MutableTextNode;
     this.headerTextNode = find('header-text') as unknown as MutableTextNode;
@@ -551,7 +573,7 @@ export class TUIApp {
     this.root = this.renderer.root as unknown as BoxRenderable;
 
     // Validate
-    if (!this.cmdListBoxNode || !this.cmdListTextNode || !this.statusBarTextNode || !this.statusBarStatsNode ||
+    if (!this.cmdListBoxNode || !this.cmdListTextNode || !this.topicsModalNode || !this.topicsModalText || !this.statusBarTextNode || !this.statusBarStatsNode ||
         !this.headerTextNode || !this.inputNode || !this.chatNode || !this.approvalDialogNode || !this.approvalDialogTextNode ||
         !this.mcpModalNode || !this.mcpModalTextNode || !this.mcpDetailsModalNode || !this.mcpDetailsHeaderBox || !this.mcpDetailsHeaderText || !this.mcpDetailsScrollBox || !this.mcpDetailsModalTextNode || !this.mcpDetailsFooterBox || !this.mcpDetailsModalFooterTextNode ||
         !this.providerModalNode || !this.providerModalTextNode || !this.modelModalNode || !this.modelModalTitleTextNode ||
@@ -675,6 +697,13 @@ export class TUIApp {
         return true;
       }
 
+      // Topics modal
+      if (this.topicsState) {
+        if (isCtrlC(sequence)) return false;
+        if (this.handleTopicsModalKey(sequence)) return true;
+        return true;
+      }
+
       // Approval dialog
       if (!this.approvalState.pendingExecution) return false;
       if (isCtrlC(sequence)) return false;
@@ -766,13 +795,18 @@ export class TUIApp {
       if ((this.modalsState.providerModalOpen || this.modalsState.modelModalOpen) && !key.ctrl && !key.meta) return;
       if (this.mcpState.mcpModalOpen && !key.ctrl && !key.meta) return;
       if (this.modalsState.sessionsModalOpen && !key.ctrl && !key.meta) return;
+      if (this.topicsState && !key.ctrl && !key.meta) return;
       if (this.approvalState.pendingExecution && !key.ctrl && !key.meta) return;
 
       this.applyKeyToBuffer(key);
 
       if (this.palette.open && key.name === 'escape') { this.clearCommandInput(); return; }
-      if (this.palette.open && (key.name === 'return' || key.name === 'linefeed' || key.name === 'tab')) {
+      if (this.palette.open && (key.name === 'return' || key.name === 'linefeed')) {
         await this.submitCurrentInput();
+        return;
+      }
+      if (this.palette.open && key.name === 'tab') {
+        this.completeSelectedCommand();
         return;
       }
       if (this.palette.open) {
@@ -933,6 +967,80 @@ export class TUIApp {
     if (!this.modalsState.providerModalOpen) {
       this.inputNode.focus();
     }
+  }
+
+  // ── Topics browser ─────────────────────────────────────────────────────
+
+  private topicsBrowser: TopicBrowserManager | null = null;
+
+  private getTopicsBrowser(): TopicBrowserManager {
+    if (!this.topicsBrowser) {
+      this.topicsBrowser = new TopicBrowserManager({
+        state: this.topicsState!,
+        messages: this.chatState.messages,
+        chatNodeIds: this.chatNodeIds,
+        chatNode: this.chatNode,
+        root: this.root,
+        topicsModalNode: this.topicsModalNode,
+        topicsModalText: this.topicsModalText,
+      });
+    }
+    return this.topicsBrowser!;
+  }
+
+  private handleTopicsCommand(args: string[]): string {
+    const keyword = args.join(' ').trim();
+    if (!this.topicsState) {
+      this.topicsState = createTopicBrowserState();
+      this.topicsBrowser = null;
+    }
+    this.getTopicsBrowser().open(keyword);
+    return keyword ? `Opened topics: "${keyword}"` : 'Opened topics browser';
+  }
+
+  private closeTopicsModal(): void {
+    if (!this.topicsState) return;
+    this.getTopicsBrowser().close();
+    this.topicsState = null;
+    this.topicsBrowser = null; // invalidate cached manager
+  }
+
+  private navigateTopicsUp(): void {
+    if (!this.topicsState) return;
+    this.getTopicsBrowser().navigateUp();
+  }
+
+  private navigateTopicsDown(): void {
+    if (!this.topicsState) return;
+    this.getTopicsBrowser().navigateDown();
+  }
+
+  private async selectAndJumpTopics(): Promise<void> {
+    if (!this.topicsState) return;
+    this.getTopicsBrowser().selectAndJump();
+    this.topicsState = null;
+  }
+
+  private renderTopicsModal(): void {
+    if (!this.topicsState) return;
+    this.getTopicsBrowser().render();
+  }
+
+  private handleTopicsModalKey(sequence: string): boolean {
+    if (!this.topicsState) return false;
+    if (isEscape(sequence)) { this.closeTopicsModal(); return true; }
+    if (isEnter(sequence)) { void this.selectAndJumpTopics(); return true; }
+    if (isArrowUp(sequence)) { this.navigateTopicsUp(); return true; }
+    if (isArrowDown(sequence)) { this.navigateTopicsDown(); return true; }
+    if (isBackspace(sequence)) { this.getTopicsBrowser().deleteFilterChar(); this.renderTopicsModal(); return true; }
+    if (isArrowLeft(sequence)) { this.getTopicsBrowser().updateFilterValue(-1); this.renderTopicsModal(); return true; }
+    if (isArrowRight(sequence)) { this.getTopicsBrowser().updateFilterValue(1); this.renderTopicsModal(); return true; }
+    if (isCtrlA(sequence)) { this.getTopicsBrowser().updateFilterValue(-9999); this.renderTopicsModal(); return true; }
+    if (isCtrlE(sequence)) { this.getTopicsBrowser().updateFilterValue(9999); this.renderTopicsModal(); return true; }
+    if (isCtrlU(sequence)) { this.getTopicsBrowser().updateFilterValue(-9999); this.getTopicsBrowser().deleteFilterChar(); this.renderTopicsModal(); return true; }
+    const char = getChar(sequence);
+    if (char && char.charCodeAt(0) >= 32) { this.getTopicsBrowser().insertFilterChar(char); this.renderTopicsModal(); return true; }
+    return true;
   }
 
   // ── Rendering ──────────────────────────────────────────────────────────
@@ -1288,6 +1396,25 @@ export class TUIApp {
     this.openPalette(value.slice(1));
   }
 
+  private completeSelectedCommand(): void {
+    if (!this.palette.open || this.palette.matches.length === 0) return;
+    const cmd = this.palette.matches[this.palette.selectedIndex];
+    // Replace command prefix with the selected command name, preserving any typed args
+    const text = this.inputNode.plainText;
+    const trimmed = text.slice(1).trim();
+    const parts = trimmed.split(/\s+/);
+    const remainingArgs = parts.slice(1).filter(Boolean);
+    const completedText = `/${cmd.name}${remainingArgs.length > 0 ? ' ' + remainingArgs.join(' ') : ''}`;
+    this.inputNode.setText(completedText);
+    if (typeof this.inputNode.cursorOffset === 'number') {
+      this.inputNode.cursorOffset = completedText.length;
+    }
+    this.inputBuffer = completedText;
+    // Re-open palette with the completed command (should narrow to just this one)
+    this.syncCommandPalette(completedText);
+    this.inputNode.focus();
+  }
+
   private applyKeyToBuffer(key: KeyEvent): void {
     if (key.ctrl && key.name === 'u') { this.inputBuffer = ''; this.paletteManager.close(); return; }
     if (key.ctrl || key.meta) return;
@@ -1309,18 +1436,50 @@ export class TUIApp {
     }
   }
 
+  private submitting = false;
+
   private async submitCurrentInput() {
+    if (this.submitting) return; // prevent double-submit from textarea onSubmit + key handler
     if (this.approvalState.pendingExecution) return;
-    if (this.palette.open) {
-      if (this.palette.matches.length === 0) return;
-      const cmd = this.palette.matches[this.palette.selectedIndex];
+    this.submitting = true;
+    try {
+      const text = this.inputNode.plainText;
+
+      // Check for command input (starts with /)
+      if (text.startsWith('/')) {
+        const trimmed = text.slice(1).trim();
+
+        // If palette is open and has matches, prefer the selected command
+        if (this.palette.open && this.palette.matches.length > 0) {
+          const cmd = this.palette.matches[this.palette.selectedIndex];
+          const args = trimmed.split(/\s+/).slice(1).filter(Boolean);
+          this.resetInput();
+          await this.executeCommand(cmd, args, text);
+          return;
+        }
+
+        // Otherwise do raw lookup (no palette visible)
+        if (trimmed.length > 0) {
+          const parts = trimmed.split(/\s+/);
+          const cmdName = parts[0];
+          const args = parts.slice(1).filter(Boolean);
+          const cmd = this.commands.find(c => c.name.startsWith(cmdName));
+          if (cmd) {
+            this.resetInput();
+            await this.executeCommand(cmd, args, text);
+            return;
+          }
+        }
+        // No matching command — fall through to send as message
+      }
+
+      // Close topics modal on new user input
+      this.closeTopicsModal();
       this.resetInput();
-      await this.executeCommand(cmd);
-      return;
+      await this.chatManager.handleInput(text);
+    } finally {
+      this.submitting = false;
     }
-    const text = this.inputNode.plainText;
-    this.resetInput();
-    await this.chatManager.handleInput(text);
   }
 
   private async executeCommand(cmd: Command, args: string[] = [], rawInput?: string) {
