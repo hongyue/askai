@@ -119,6 +119,8 @@ export interface ModalsState {
   sessionsScrollOffset: number;
   sessionsRenaming: { id: string; value: string; cursorOffset: number } | null;
   deleteSessionConfirm: { id: string } | null;
+  sessionsFilter: FilterState;
+  sessionsFilterFocus: boolean;
 }
 
 export function createModalsState(): ModalsState {
@@ -148,6 +150,8 @@ export function createModalsState(): ModalsState {
     sessionsScrollOffset: 0,
     sessionsRenaming: null,
     deleteSessionConfirm: null,
+    sessionsFilter: { value: '', cursorOffset: 0 },
+    sessionsFilterFocus: true,
   };
 }
 
@@ -918,10 +922,14 @@ export class ModalsStateManager {
   }
 
   updateSessionsList(): void {
-    this.host.state.sessionsList = this.host.listSessions();
+    const allSessions = this.host.listSessions();
+    // Only show saved sessions (with non-empty id)
+    this.host.state.sessionsList = allSessions.filter(s => s.id !== '');
     if (!this.host.state.sessionsList.some(s => s.id === this.host.getCurrentSession().id)) {
       const cs = this.host.getCurrentSession();
-      this.host.state.sessionsList.unshift({
+      // Only add to list if it's a saved session (has an id)
+      if (cs.id) {
+        this.host.state.sessionsList.unshift({
         id: cs.id,
         title: cs.title,
         provider: cs.provider,
@@ -933,7 +941,8 @@ export class ModalsStateManager {
         created_at: Date.now(),
         updated_at: Date.now(),
         message_count: this.host.getMessages().filter(m => m.role !== 'system').length,
-      });
+        });
+      }
     }
   }
 

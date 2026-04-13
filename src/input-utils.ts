@@ -188,6 +188,14 @@ export function isCtrlU(sequence: string): boolean {
   return sequence === '\x15' || sequence === '\x1b[21;5u' || sequence === '\x1b[117;5u';
 }
 
+export function isCtrlR(sequence: string): boolean {
+  return sequence === '\x12' || sequence === '\x1b[114;5u';
+}
+
+export function isCtrlD(sequence: string): boolean {
+  return sequence === '\x04' || sequence === '\x1b[100;5u';
+}
+
 export function getChar(sequence: string): string | null {
   if (sequence.length === 1) {
     return sequence;
