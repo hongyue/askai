@@ -207,7 +207,7 @@ export class McpManager {
 
     const states = this.host.runtime.getMcpServerStates();
     if (states.length === 0) {
-      this.host.mcpModalTextNode.content = stringToStyledText('MCP\n\nNo MCP servers configured.\n\nEsc/q close');
+      this.host.mcpModalTextNode.content = stringToStyledText('MCP\n\nNo MCP servers configured.\n\nesc/q close');
       this.host.mcpModalNode.visible = true;
       this.host.root.requestRender();
       return;
@@ -246,7 +246,7 @@ export class McpManager {
       'Summary',
       summaryLines,
       '',
-      '\u2191/\u2193 select server   C connect/disconnect   Space toggle auto-connect   Enter details   Esc/q close',
+      '\u2191/\u2193 select server   c connect/disconnect   space toggle auto-connect   enter details   esc/q close',
     ].join('\n'));
     this.host.mcpModalTextNode.content = new StyledText([
       ...header.chunks,
@@ -289,7 +289,7 @@ export class McpManager {
     this.host.mcpDetailsModalTextNode.content = stringToStyledText(visibleLines.join('\n'));
     this.host.mcpDetailsModalFooterTextNode.content = stringToStyledText([
       `Scroll ${s.mcpDetailsScrollOffset + 1}-${Math.min(s.mcpDetailsScrollOffset + visibleLines.length, allLines.length)} / ${allLines.length}`,
-      '\u2191/\u2193 scroll   PgUp/PgDn jump   Esc/q close',
+      '\u2191/\u2193 scroll   esc/q close',
     ].join('\n'));
     this.syncMcpLifecycleRefreshTimer();
     this.host.mcpDetailsModalNode.visible = true;

@@ -255,7 +255,7 @@ export function renderProviderModal(ctx: ModalRenderContext): void {
       chunks.push(white('\n'));
     }
 
-    chunks.push(white('Tab/↑/↓ move   Enter save   Esc cancel'));
+    chunks.push(white('tab/↑/↓ move   enter save   esc cancel'));
     ctx.providerModalTextNode.content = new StyledText(chunks);
     ctx.providerModalNode.visible = true;
     if (ctx.inputNode.blur) ctx.inputNode.blur();
@@ -280,7 +280,7 @@ export function renderProviderModal(ctx: ModalRenderContext): void {
       chunks.push(white('\n\n'));
     }
 
-    chunks.push(white('Enter confirm   Esc cancel'));
+    chunks.push(white('enter confirm   esc cancel'));
     ctx.providerModalTextNode.content = new StyledText(chunks);
     ctx.providerModalNode.visible = true;
     if (ctx.inputNode.blur) ctx.inputNode.blur();
@@ -295,7 +295,7 @@ export function renderProviderModal(ctx: ModalRenderContext): void {
       '',
       `Delete "${ctx.deleteProviderConfirm.providerId}"? This will remove the provider and all its models.`,
       '',
-      'y confirm   n/Esc cancel',
+      'y confirm   n/esc cancel',
     ];
     ctx.providerModalTextNode.content = stringToStyledText(lines.join('\n'));
     ctx.providerModalNode.visible = true;
@@ -329,8 +329,8 @@ export function renderProviderModal(ctx: ModalRenderContext): void {
 
   const canDelete = selectedProvider && ctx.isCustomProviderId(selectedProvider.id);
   const helpText = canDelete
-    ? '↑/↓ move   Enter edit   +/a add   d delete   m models   Esc/q close'
-    : '↑/↓ move   Enter edit   +/a add   m models   Esc/q close';
+    ? '↑/↓ move   enter edit   +/a add   d delete   m models   esc/q close'
+    : '↑/↓ move   enter edit   +/a add   m models   esc/q close';
 
   const lines = [
     'Configure providers',
@@ -400,7 +400,7 @@ export function renderModelModal(ctx: ModalRenderContext): void {
       '',
       `Delete "${ctx.deleteModelConfirm.model}" from ${ctx.deleteModelConfirm.providerId}?`,
       '',
-      'y confirm   n/Esc cancel',
+      'y confirm   n/esc cancel',
     ];
     ctx.modelModalTitleTextNode.content = stringToStyledText('Confirm delete\n');
     ctx.modelModalProvidersTextNode.content = stringToStyledText('');
@@ -438,7 +438,7 @@ export function renderModelModal(ctx: ModalRenderContext): void {
       chunks.push(fg('#ff4444')(`Error: ${ctx.modelModalNotice}`));
     }
     chunks.push(white('\n\n'));
-    chunks.push(white('Enter confirm   Esc cancel'));
+    chunks.push(white('enter confirm   esc cancel'));
 
     ctx.modelModalTitleTextNode.content = stringToStyledText('Select a model to use\n');
     ctx.modelModalProvidersTextNode.content = stringToStyledText(
@@ -482,12 +482,12 @@ export function renderModelModal(ctx: ModalRenderContext): void {
 
   const canDelete = selectedProvider ? models.length > 1 : false;
   const helpParts = [];
-  helpParts.push('Tab switch list');
+  helpParts.push('tab switch list');
   helpParts.push('↑/↓ move');
-  helpParts.push('Enter use model');
+  helpParts.push('enter use model');
   if (canDelete) helpParts.push('d delete model');
   helpParts.push('+/a add model');
-  helpParts.push('Esc/q close');
+  helpParts.push('esc/q close');
   modelContent.push('', helpParts.join('   '));
 
   ctx.modelModalTitleTextNode.content = stringToStyledText(titleContent.join('\n'));
