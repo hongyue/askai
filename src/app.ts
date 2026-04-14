@@ -245,16 +245,19 @@ export class TUIApp {
     this.palette.matches = [...commands];
 
     // Build renderer and UI
+    const isExcludedTerminal = ['iTerm.app', 'kitty', 'ghostty'].includes(process.env.TERM_PROGRAM ?? '');
     const renderer = await createCliRenderer({
       exitOnCtrlC: false,
       screenMode: 'alternate-screen',
-      useKittyKeyboard: process.env.TERM_PROGRAM === 'iTerm.app' ? null : {
+      useKittyKeyboard: isExcludedTerminal ? null : {
         disambiguate: true,
         allKeysAsEscapes: true,
         reportText: true,
       },
     });
-    process.stdout.write(enableModifyOtherKeys);
+    if (isExcludedTerminal) {
+      process.stdout.write(enableModifyOtherKeys);
+    }
     this.renderer = renderer;
 
     this.buildUITree(renderer);
