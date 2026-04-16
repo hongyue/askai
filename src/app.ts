@@ -111,6 +111,7 @@ import { PaletteManager, type IPaletteHost } from './ui/palette';
 import { McpManager, type IMcpHost, createMcpState, type McpState } from './ui/mcp';
 import { ApprovalManager, type IApprovalHost, createApprovalState, type ApprovalState, type ActiveShellCommand } from './ui/approval';
 import { ChatManager, type IChatHost, createChatState, type ChatState } from './ui/chat';
+import { SessionsManager, type ISessionsHost } from './ui/sessions-manager';
 import { ModalsStateManager, type IModalsHost, createModalsState, type ModalsState, formatRelativeTime, ProviderSlot, getVisibleProviderFormFields } from './ui/modals-state';
 import type { MutableBoxNode, MutableTextNode, MutableInputNode } from './ui/tui-types';
 
@@ -154,6 +155,7 @@ export class TUIApp {
   private approvalManager!: ApprovalManager;
   private chatManager!: ChatManager;
   private modalsManager!: ModalsStateManager;
+  private sessionsManager!: SessionsManager;
 
   // Processing
   private inputBuffer = '';
@@ -269,6 +271,7 @@ export class TUIApp {
     this.approvalManager = new ApprovalManager(this.buildApprovalHost());
     this.chatManager = new ChatManager(this.buildChatHost());
     this.modalsManager = new ModalsStateManager(this.buildModalsHost());
+    this.sessionsManager = new SessionsManager(this.buildSessionsHost());
 
     this.wireEventHandlers();
   }
@@ -396,6 +399,26 @@ export class TUIApp {
       startNewSession: () => this.runtime.startNewSession(),
       getCurrentSession: () => this.chatState.currentSession,
       getMessages: () => this.chatState.messages,
+    };
+  }
+
+  private buildSessionsHost(): ISessionsHost {
+    return {
+      state: this.modalsState,
+      chatState: this.chatState,
+      runtime: {
+        loadPersistedSession: (id) => this.runtime.loadPersistedSession(id),
+        startNewSession: () => this.runtime.startNewSession(),
+      },
+      chatManager: this.chatManager,
+      renderSessionsModal: () => this.renderSessionsModal(),
+      closeSessionsModal: () => this.closeSessionsModal(),
+      renderHeader: () => this.renderHeader(),
+      renderStatusBar: () => this.renderStatusBar(),
+      root: this.root,
+      listSessions: () => this.listSessions(),
+      renameSession: (id, title) => this.renameSession(id, title),
+      deleteSession: (id) => this.deleteSession(id),
     };
   }
 
@@ -676,7 +699,7 @@ export class TUIApp {
       // Sessions modal
       if (this.modalsState.sessionsModalOpen) {
         if (isCtrlC(sequence)) return false;
-        if (this.handleSessionsModalSequence(sequence)) return true;
+        if (this.sessionsManager.handleSequence(sequence)) return true;
         return true;
       }
 
@@ -867,7 +890,7 @@ export class TUIApp {
         if (normalizedText) {
           this.modalsState.sessionsFilter.value = this.modalsState.sessionsFilter.value.slice(0, this.modalsState.sessionsFilter.cursorOffset) + normalizedText + this.modalsState.sessionsFilter.value.slice(this.modalsState.sessionsFilter.cursorOffset);
           this.modalsState.sessionsFilter.cursorOffset += normalizedText.length;
-          this.clampSelectionToFiltered();
+          this.sessionsManager.clampSelectionToFiltered();
           this.renderSessionsModal();
         }
         return;
@@ -1171,264 +1194,6 @@ export class TUIApp {
       deleteModelFilterText: () => mm.deleteModelFilterText(),
       insertModelFilterText: (t) => mm.insertModelFilterText(t),
     };
-  }
-
-  private handleSessionsModalSequence(sequence: string): boolean {
-    const ms = this.modalsState;
-
-    // Esc always handled first — cancels sub-states or closes modal
-    if (isEscape(sequence)) {
-      if (ms.deleteSessionConfirm) {
-        ms.deleteSessionConfirm = null;
-        this.renderSessionsModal();
-        return true;
-      }
-      if (ms.sessionsRenaming) {
-        ms.sessionsRenaming = null;
-        this.renderSessionsModal();
-        return true;
-      }
-      this.closeSessionsModal();
-      return true;
-    }
-
-    // Delete session confirmation
-    if (ms.deleteSessionConfirm) {
-      if (isEnter(sequence)) {
-        const wasActive = ms.deleteSessionConfirm.id === this.chatState.currentSession.id;
-        this.deleteSession(ms.deleteSessionConfirm.id);
-        if (wasActive) {
-          this.chatState.currentSession = this.runtime.startNewSession();
-          this.chatManager.clearAllMessages();
-          this.renderHeader();
-          this.renderStatusBar();
-        }
-        ms.deleteSessionConfirm = null;
-        ms.sessionsList = this.listSessions();
-        ms.sessionsSelectedIndex = Math.min(ms.sessionsSelectedIndex, Math.max(0, ms.sessionsList.length - 1));
-        this.renderSessionsModal();
-        return true;
-      }
-      return true;
-    }
-
-    // Rename session input
-    if (ms.sessionsRenaming) {
-      if (isEnter(sequence)) {
-        const newTitle = ms.sessionsRenaming.value.trim();
-        if (newTitle) {
-          this.renameSession(ms.sessionsRenaming.id, newTitle);
-          ms.sessionsList = this.listSessions();
-          if (ms.sessionsRenaming.id === this.chatState.currentSession.id) {
-            this.chatState.currentSession = { ...this.chatState.currentSession, title: newTitle };
-            this.renderHeader();
-            this.renderStatusBar();
-          }
-        }
-        ms.sessionsRenaming = null;
-        this.renderSessionsModal();
-        return true;
-      }
-      if (isCtrlA(sequence)) { ms.sessionsRenaming.cursorOffset = 0; this.renderSessionsModal(); return true; }
-      if (isCtrlE(sequence)) { ms.sessionsRenaming.cursorOffset = ms.sessionsRenaming.value.length; this.renderSessionsModal(); return true; }
-      if (isCtrlU(sequence)) { ms.sessionsRenaming.value = ms.sessionsRenaming.value.slice(ms.sessionsRenaming.cursorOffset); ms.sessionsRenaming.cursorOffset = 0; this.renderSessionsModal(); return true; }
-      if (isArrowLeft(sequence)) { ms.sessionsRenaming.cursorOffset = Math.max(0, ms.sessionsRenaming.cursorOffset - 1); this.renderSessionsModal(); return true; }
-      if (isArrowRight(sequence)) { ms.sessionsRenaming.cursorOffset = Math.min(ms.sessionsRenaming.value.length, ms.sessionsRenaming.cursorOffset + 1); this.renderSessionsModal(); return true; }
-      if (isBackspace(sequence)) {
-        if (ms.sessionsRenaming.cursorOffset > 0) {
-          ms.sessionsRenaming.value = ms.sessionsRenaming.value.slice(0, ms.sessionsRenaming.cursorOffset - 1) + ms.sessionsRenaming.value.slice(ms.sessionsRenaming.cursorOffset);
-          ms.sessionsRenaming.cursorOffset--;
-          this.renderSessionsModal();
-        }
-        return true;
-      }
-      {
-        const char = getChar(sequence);
-        if (char !== null && char.charCodeAt(0) >= 32) {
-          ms.sessionsRenaming.value = ms.sessionsRenaming.value.slice(0, ms.sessionsRenaming.cursorOffset) + char + ms.sessionsRenaming.value.slice(ms.sessionsRenaming.cursorOffset);
-          ms.sessionsRenaming.cursorOffset++;
-          this.renderSessionsModal();
-          return true;
-        }
-      }
-      if (sequence.length > 1 && !sequence.includes('\x1b')) {
-        const normalizedText = sequence.replace(/\r\n/g, '\n').replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '').replace(/\n/g, ' ');
-        if (normalizedText) {
-          ms.sessionsRenaming.value = ms.sessionsRenaming.value.slice(0, ms.sessionsRenaming.cursorOffset) + normalizedText + ms.sessionsRenaming.value.slice(ms.sessionsRenaming.cursorOffset);
-          ms.sessionsRenaming.cursorOffset += normalizedText.length;
-          this.renderSessionsModal();
-        }
-        return true;
-      }
-      return true;
-    }
-
-    // Shortcuts (checked before text input so they don't get captured by filter)
-    if (isCtrlR(sequence)) {
-      const filtered = this.getFilteredSessions();
-      if (ms.sessionsSelectedIndex >= 0 && filtered.length > 0) {
-        const selected = filtered[ms.sessionsSelectedIndex];
-        if (selected) {
-          ms.sessionsRenaming = { id: selected.id, value: selected.title, cursorOffset: selected.title.length };
-          this.renderSessionsModal();
-        }
-      }
-      return true;
-    }
-    if (isCtrlD(sequence)) {
-      const filtered = this.getFilteredSessions();
-      if (ms.sessionsSelectedIndex >= 0 && filtered.length > 0) {
-        const selected = filtered[ms.sessionsSelectedIndex];
-        if (selected) {
-          this.modalsManager.showDeleteSessionConfirmation(selected.id);
-        }
-      }
-      return true;
-    }
-
-    // Navigation
-    if (isArrowUp(sequence)) {
-      const filteredLen = this.getFilteredSessionsLength();
-      if (filteredLen > 0) {
-        if (ms.sessionsSelectedIndex <= 0) {
-          ms.sessionsSelectedIndex = filteredLen - 1;
-        } else {
-          ms.sessionsSelectedIndex = ms.sessionsSelectedIndex - 1;
-        }
-        this.renderSessionsModal();
-      }
-      return true;
-    }
-    if (isArrowDown(sequence)) {
-      const filteredLen = this.getFilteredSessionsLength();
-      if (filteredLen > 0) {
-        if (ms.sessionsSelectedIndex < 0) {
-          ms.sessionsSelectedIndex = 0;
-        } else {
-          ms.sessionsSelectedIndex = Math.min(filteredLen - 1, ms.sessionsSelectedIndex + 1);
-        }
-        this.renderSessionsModal();
-      }
-      return true;
-    }
-    if (sequence === '\x1b[5~') {
-      const filteredLen = this.getFilteredSessionsLength();
-      if (filteredLen > 0) {
-        ms.sessionsSelectedIndex = Math.max(0, ms.sessionsSelectedIndex - sessionsVisibleLineCount);
-        this.renderSessionsModal();
-      }
-      return true;
-    }
-    if (sequence === '\x1b[6~') {
-      const filteredLen = this.getFilteredSessionsLength();
-      if (filteredLen > 0) {
-        if (ms.sessionsSelectedIndex < 0) {
-          ms.sessionsSelectedIndex = 0;
-        } else {
-          ms.sessionsSelectedIndex = Math.min(filteredLen - 1, ms.sessionsSelectedIndex + sessionsVisibleLineCount);
-        }
-        this.renderSessionsModal();
-      }
-      return true;
-    }
-    if (isEnter(sequence)) {
-      if (ms.sessionsSelectedIndex >= 0) {
-        const filtered = this.getFilteredSessions();
-        const selected = filtered[ms.sessionsSelectedIndex];
-        if (selected) {
-          this.runtime.loadPersistedSession(selected.id);
-          this.chatState.currentSession = this.getSession(selected.id)!;
-          this.chatManager.clearAllMessages();
-          for (const msg of this.chatState.messages) {
-            if (msg.role === 'system') continue;
-            if (msg.role === 'user') this.chatManager.addUserMsg(msg.content as string);
-            else if (msg.role === 'assistant' && msg.content) this.chatManager.addMsg(msg.content as string, '#ffffff', true);
-            else if (msg.role === 'tool') this.chatManager.addMsg(`[tool] ${msg.content}`, '#888888');
-          }
-          this.closeSessionsModal();
-          this.renderHeader();
-          this.renderStatusBar();
-          this.root.requestRender();
-        }
-      }
-      return true;
-    }
-
-    // Filter text input (everything else goes into the filter)
-    if (isArrowLeft(sequence)) {
-      ms.sessionsFilter.cursorOffset = Math.max(0, ms.sessionsFilter.cursorOffset - 1);
-      this.renderSessionsModal();
-      return true;
-    }
-    if (isArrowRight(sequence)) {
-      ms.sessionsFilter.cursorOffset = Math.min(ms.sessionsFilter.value.length, ms.sessionsFilter.cursorOffset + 1);
-      this.renderSessionsModal();
-      return true;
-    }
-    if (isCtrlA(sequence)) {
-      ms.sessionsFilter.cursorOffset = 0;
-      this.renderSessionsModal();
-      return true;
-    }
-    if (isCtrlE(sequence)) {
-      ms.sessionsFilter.cursorOffset = ms.sessionsFilter.value.length;
-      this.renderSessionsModal();
-      return true;
-    }
-    if (isCtrlU(sequence)) {
-      ms.sessionsFilter.value = ms.sessionsFilter.value.slice(ms.sessionsFilter.cursorOffset);
-      ms.sessionsFilter.cursorOffset = 0;
-      this.renderSessionsModal();
-      return true;
-    }
-    if (isBackspace(sequence)) {
-      if (ms.sessionsFilter.cursorOffset > 0) {
-        ms.sessionsFilter.value = ms.sessionsFilter.value.slice(0, ms.sessionsFilter.cursorOffset - 1) + ms.sessionsFilter.value.slice(ms.sessionsFilter.cursorOffset);
-        ms.sessionsFilter.cursorOffset--;
-        this.renderSessionsModal();
-      }
-      return true;
-    }
-    {
-      const char = getChar(sequence);
-      if (char !== null && char.charCodeAt(0) >= 32) {
-        ms.sessionsFilter.value = ms.sessionsFilter.value.slice(0, ms.sessionsFilter.cursorOffset) + char + ms.sessionsFilter.value.slice(ms.sessionsFilter.cursorOffset);
-        ms.sessionsFilter.cursorOffset++;
-        this.clampSelectionToFiltered();
-        this.renderSessionsModal();
-        return true;
-      }
-    }
-    if (sequence.length > 1 && !sequence.includes('\x1b')) {
-      const normalizedText = sequence.replace(/\r\n/g, '\n').replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '').replace(/\n/g, ' ');
-      if (normalizedText) {
-        ms.sessionsFilter.value = ms.sessionsFilter.value.slice(0, ms.sessionsFilter.cursorOffset) + normalizedText + ms.sessionsFilter.value.slice(ms.sessionsFilter.cursorOffset);
-        ms.sessionsFilter.cursorOffset += normalizedText.length;
-        this.clampSelectionToFiltered();
-        this.renderSessionsModal();
-      }
-      return true;
-    }
-    return true;
-  }
-
-  private clampSelectionToFiltered(): void {
-    const filteredLen = this.getFilteredSessionsLength();
-    if (this.modalsState.sessionsSelectedIndex >= filteredLen) {
-      this.modalsState.sessionsSelectedIndex = Math.max(-1, filteredLen - 1);
-    }
-  }
-
-  private getFilteredSessions(): typeof this.modalsState.sessionsList {
-    const ms = this.modalsState;
-    const normalizedFilter = ms.sessionsFilter.value.trim().toLowerCase();
-    return normalizedFilter
-      ? ms.sessionsList.filter(s => s.title.toLowerCase().includes(normalizedFilter))
-      : ms.sessionsList;
-  }
-
-  private getFilteredSessionsLength(): number {
-    return this.getFilteredSessions().length;
   }
 
   private async deleteModelConfirmAction(model: string, providerId: string): Promise<void> {

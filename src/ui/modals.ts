@@ -13,57 +13,18 @@ import {
 import {
   sessionsVisibleLineCount,
 } from "../input-utils";
-import type { ProviderType } from '../config';
 import type { MutableBoxNode, MutableTextNode, MutableInputNode } from "./tui-types";
+import type {
+  ProviderFormState,
+  ProviderFormField,
+  FilterState,
+  ProviderSlot,
+  SessionSummary,
+  ModelModalFocus,
+} from "./modals-state";
 
 const providerModalVisibleItems = 8;
 const providerModalVisibleModels = 8;
-
-export interface ProviderFormField {
-  key: string;
-  label: string;
-  kind: 'text' | 'select';
-}
-
-export interface ProviderFormState {
-  providerId: string;
-  values: Record<string, string>;
-  activeFieldIndex: number;
-  cursorOffset: number;
-  error?: string;
-}
-
-export interface FilterState {
-  value: string;
-  cursorOffset: number;
-}
-
-export interface ProviderSlot {
-  id: string;
-  displayName: string;
-  type: ProviderType;
-  configured: boolean;
-  apiKeyConfigured: boolean;
-  baseUrl?: string;
-  model?: string;
-  models: string[];
-}
-
-export interface SessionSummary {
-  id: string;
-  title: string;
-  provider: string;
-  model: string;
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  last_token_speed: number | null;
-  created_at: number;
-  updated_at: number;
-  message_count: number;
-}
-
-type ModelModalFocus = 'providers' | 'filter' | 'models';
 
 // ── Context interfaces ──────────────────────────────────────────────────────
 
