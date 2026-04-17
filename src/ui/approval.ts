@@ -5,6 +5,7 @@
  */
 
 import { stringToStyledText } from "@opentui/core";
+import { platform } from "process";
 import {
   detectCodeBlocks,
   executeCommand as executeShellCommand,
@@ -29,6 +30,18 @@ export interface ApprovalState {
   approvalDraftCursorOffset: number;
   approvalSelectionIndex: number;
   approvalActionInFlight: boolean;
+  sudoPasswordInputText: string;
+  sudoPasswordCursorOffset: number;
+  /** Session-level cached sudo password for the current approval batch */
+  sessionSudoPassword: string | null;
+  /** Sudo password prompt state (password not yet collected) */
+  sudoPasswordPrompt: { command: string; index: number } | null;
+  /** Password retry attempt counter */
+  sudoRetryCount: number;
+  /** Last key character for debouncing duplicate events on Linux */
+  sudoLastKeyChar: string;
+  /** Timestamp of last key event for debouncing */
+  sudoLastKeyAt: number;
 }
 
 export function createApprovalState(): ApprovalState {
@@ -38,6 +51,13 @@ export function createApprovalState(): ApprovalState {
     approvalDraftCursorOffset: 0,
     approvalSelectionIndex: 0,
     approvalActionInFlight: false,
+    sudoPasswordInputText: '',
+    sudoPasswordCursorOffset: 0,
+    sessionSudoPassword: null,
+    sudoPasswordPrompt: null,
+    sudoRetryCount: 0,
+    sudoLastKeyChar: '',
+    sudoLastKeyAt: 0,
   };
 }
 
@@ -60,6 +80,9 @@ export interface IApprovalHost {
 
   addMsg(text: string, color: string): void;
   renderStatusBar(): void;
+  updateFooterLayout(): void;
+  pauseRenderer(): void;
+  resumeRenderer(): void;
 
   // UI nodes
   approvalDialogNode: MutableBoxNode;
@@ -97,6 +120,32 @@ function isRejectAllAnswer(text: string): boolean {
   return ['x', 'none', 'no-all', 'reject-all'].includes(normalized);
 }
 
+// ── Sudo helpers ─────────────────────────────────────────────────────────────
+
+/** Returns true if the command starts with 'sudo ' (handles leading whitespace) */
+export function isSudoCommand(command: string): boolean {
+  const trimmed = command.trim();
+  return trimmed.startsWith('sudo ') || trimmed.startsWith('sudo\t');
+}
+
+/**
+ * Returns true if the result looks like a sudo authentication failure.
+ * Matches common sudo password rejection patterns.
+ */
+export function isSudoAuthFailure(result: CommandResult): boolean {
+  if (result.exitCode !== 1) return false;
+  const combined = (result.stderr + '\n' + result.stdout).toLowerCase();
+  return (
+    combined.includes('incorrect password') ||
+    combined.includes('sorry, try again') ||
+    combined.includes('incorrect sudo password') ||
+    combined.includes('password verification failed') ||
+    combined.includes('authentication failure') ||
+    combined.includes('a password is required') ||
+    combined.includes('terminal is required')
+  );
+}
+
 // ── Manager class ────────────────────────────────────────────────────────────
 
 export class ApprovalManager {
@@ -114,6 +163,16 @@ export class ApprovalManager {
   set approvalSelectionIndex(v: number) { this.host.state.approvalSelectionIndex = v; }
   get approvalActionInFlight(): boolean { return this.host.state.approvalActionInFlight; }
   set approvalActionInFlight(v: boolean) { this.host.state.approvalActionInFlight = v; }
+  get sudoPasswordInputText(): string { return this.host.state.sudoPasswordInputText; }
+  set sudoPasswordInputText(v: string) { this.host.state.sudoPasswordInputText = v; }
+  get sudoPasswordCursorOffset(): number { return this.host.state.sudoPasswordCursorOffset; }
+  set sudoPasswordCursorOffset(v: number) { this.host.state.sudoPasswordCursorOffset = v; }
+  get sessionSudoPassword(): string | null { return this.host.state.sessionSudoPassword; }
+  set sessionSudoPassword(v: string | null) { this.host.state.sessionSudoPassword = v; }
+  get sudoPasswordPrompt(): { command: string; index: number } | null { return this.host.state.sudoPasswordPrompt; }
+  set sudoPasswordPrompt(v: { command: string; index: number } | null) { this.host.state.sudoPasswordPrompt = v; }
+  get sudoRetryCount(): number { return this.host.state.sudoRetryCount; }
+  set sudoRetryCount(v: number) { this.host.state.sudoRetryCount = v; }
   get activeShellCommand(): ActiveShellCommand | null { return this.host.activeShellCommand; }
   set activeShellCommand(v: ActiveShellCommand | null) { this.host.setActiveShellCommand(v); }
 
@@ -122,6 +181,7 @@ export class ApprovalManager {
   hideApprovalDialog(): void {
     this.host.approvalDialogNode.visible = false;
     this.host.approvalDialogTextNode.content = stringToStyledText('');
+    this.host.updateFooterLayout();
     this.host.root.requestRender();
     this.host.inputNode.focus();
   }
@@ -135,6 +195,22 @@ export class ApprovalManager {
     }
     this.host.setInputBuffer(this.host.state.approvalDraftText);
     this.host.inputNode.focus();
+  }
+
+  clearSudoPasswordInput(): void {
+    this.host.state.sudoPasswordInputText = '';
+    this.host.state.sudoPasswordCursorOffset = 0;
+    this.host.setInputBuffer('');
+    this.host.inputNode.setText('');
+    if (typeof this.host.inputNode.cursorOffset === 'number') {
+      this.host.inputNode.cursorOffset = 0;
+    }
+  }
+
+  getSudoPasswordMask(): string {
+    const masked = '*'.repeat(this.host.state.sudoPasswordInputText.length);
+    const cursor = Math.max(0, Math.min(this.host.state.sudoPasswordCursorOffset, masked.length));
+    return `${masked.slice(0, cursor)}|${masked.slice(cursor)}`;
   }
 
   renderApprovalDialog(): void {
@@ -162,10 +238,49 @@ export class ApprovalManager {
       `Shell command detected${ordinal}\n\n${formatApprovalDialogCommand(block)}\n\n${paddedActions}\n\nUse left/right to choose, Enter to confirm`
     );
     this.host.approvalDialogNode.visible = true;
+    this.host.updateFooterLayout();
     if (this.host.inputNode.blur) {
       this.host.inputNode.blur();
     }
     this.host.root.requestRender();
+  }
+
+  // ── Sudo password dialog ─────────────────────────────────────────────────
+
+  /**
+   * Prompt for sudo password using the approval dialog area.
+   * The password is captured via the chat input (host.inputNode) and
+   * never enters the chat message history.
+   */
+  renderSudoPasswordDialog(): void {
+    if (!this.host.state.sudoPasswordPrompt) return;
+
+    const { command, index } = this.host.state.sudoPasswordPrompt;
+    const ordinal = this.host.state.pendingExecution &&
+      this.host.state.pendingExecution.blocks.length > 1
+      ? ` (${index + 1}/${this.host.state.pendingExecution.blocks.length})`
+      : '';
+    const retryHint = this.host.state.sudoRetryCount > 1
+      ? `\nIncorrect password. Please try again.`  : '';
+    const maskedPassword = this.getSudoPasswordMask();
+
+    this.host.approvalDialogTextNode.content = stringToStyledText(
+      `Sudo requires password${ordinal}${retryHint}\n\n${formatApprovalDialogCommand({ code: command, language: 'shell', fullMatch: command })}\n\nPassword: ${maskedPassword}\n\nPress Enter to continue\nEsc to cancel${retryHint}`
+    );
+    this.host.approvalDialogNode.visible = true;
+    this.host.updateFooterLayout();
+    if (this.host.inputNode.blur) {
+      this.host.inputNode.blur();
+    }
+    this.host.root.requestRender();
+  }
+
+  promptPendingSudoExecution(): void {
+    this.clearSudoPasswordInput();
+    this.host.state.approvalSelectionIndex = 0;
+    this.host.state.sudoLastKeyChar = '';
+    this.host.state.sudoLastKeyAt = 0;
+    this.renderSudoPasswordDialog();
   }
 
   promptPendingExecution(resetSelection = true): void {
@@ -181,10 +296,70 @@ export class ApprovalManager {
 
   // ── Command execution ────────────────────────────────────────────────────
 
-  async runCommandBlock(block: CommandBlock): Promise<void> {
+  async runCommandBlock(block: CommandBlock, password?: string, interactive = false): Promise<CommandResult> {
     this.host.addMsg(`$ ${block.code}`, '#00ff88');
     let shellCommandRef: ActiveShellCommand | undefined;
+    let result: CommandResult;
+    try {
+      if (interactive) {
+        this.host.pauseRenderer();
+      }
+      result = await executeShellCommand(block.code, {
+        password,
+        interactive,
+        onStart: (proc) => {
+          shellCommandRef = {
+            command: block.code,
+            proc,
+            interrupted: false,
+            interruptStage: 0,
+          };
+          this.host.setActiveShellCommand(shellCommandRef);
+          this.host.renderStatusBar();
+        },
+      });
+    } finally {
+      if (interactive) {
+        this.host.resumeRenderer();
+      }
+    }
+    if (shellCommandRef?.escalationTimer) {
+      clearTimeout(shellCommandRef.escalationTimer);
+    }
+    if (shellCommandRef && shellCommandRef.interrupted) {
+      result.interrupted = true;
+    }
+    if (this.host.activeShellCommand?.command === block.code) {
+      this.host.setActiveShellCommand(null);
+    }
+    for (const line of formatCommandResult(result).split('\n')) {
+      this.host.addMsg(line, result.exitCode === 0 ? '#888888' : '#ff4444');
+    }
+    return result;
+  }
+
+  /**
+   * Runs a sudo command with session-level password caching and
+   * automatic retry on authentication failure.
+   *
+   * @param passwordForRetry - If provided, this is a re-run after the user entered
+   *   a password in the TUI dialog. Run with -S and the piped password to verify it.
+   *   If undefined, this is the first attempt — use sessionSudoPassword if cached
+   *   from a prior sudo in the same batch. If sessionSudoPassword is also null/undefined,
+   *   run without password; if sudo auth fails, isSudoAuthFailure shows the TUI dialog.
+   */
+  async runCommandBlockWithSudoRetry(block: CommandBlock, passwordForRetry?: string): Promise<boolean> {
+    const isRetry = passwordForRetry !== undefined;
+    // On retry (TUI dialog re-run): use the password the user just entered.
+    // On first attempt: use sessionSudoPassword if cached from a prior sudo.
+    // If sessionSudoPassword is null/undefined, run without password — if sudo
+    // needs a password it'll fail and isSudoAuthFailure will prompt the TUI dialog.
+    let password = isRetry ? passwordForRetry : this.host.state.sessionSudoPassword;
+    console.error("[DEBUG] password for sudo:", password ? "(set)" : "null", "| isRetry:", isRetry, "| sessionSudoPassword:", this.host.state.sessionSudoPassword ? "(set)" : "null");
+
+    let shellCommandRef: ActiveShellCommand | undefined;
     const result = await executeShellCommand(block.code, {
+      password: password ?? undefined,
       onStart: (proc) => {
         shellCommandRef = {
           command: block.code,
@@ -196,6 +371,7 @@ export class ApprovalManager {
         this.host.renderStatusBar();
       },
     });
+
     if (shellCommandRef?.escalationTimer) {
       clearTimeout(shellCommandRef.escalationTimer);
     }
@@ -205,10 +381,66 @@ export class ApprovalManager {
     if (this.host.activeShellCommand?.command === block.code) {
       this.host.setActiveShellCommand(null);
     }
-    this.host.renderStatusBar();
-    for (const line of formatCommandResult(result).split('\n')) {
-      this.host.addMsg(line, result.exitCode === 0 ? '#888888' : '#ff4444');
+
+    if (!isSudoAuthFailure(result)) {
+      // Command succeeded (correct password or no password needed).
+      // Cache the password so subsequent sudo commands in the same batch use it.
+      if (isRetry && passwordForRetry) {
+        this.host.state.sessionSudoPassword = passwordForRetry;
+        console.error("[DEBUG] CACHED PASSWORD in sessionSudoPassword");
+      }
+      // Format and display result normally
+      for (const line of formatCommandResult(result).split('\n')) {
+        this.host.addMsg(line, result.exitCode === 0 ? '#888888' : '#ff4444');
+      }
+      return true;
     }
+
+    // Auth failure — prompt for new password
+    this.host.state.sessionSudoPassword = null; // clear stale cache
+    this.host.state.sudoRetryCount++;
+    this.sudoPasswordPrompt = {
+      command: block.code,
+      index: this.host.state.pendingExecution?.index ?? 0,
+    };
+    this.host.renderStatusBar(); // update to reflect password prompt state
+    this.promptPendingSudoExecution();
+    return false;
+  }
+
+  async validateSudoPassword(password: string): Promise<boolean> {
+    // Use `sudo -S true` to force sudo to read the password from stdin (-S flag).
+    // On macOS with cached credentials, sudo -k would bust the cache but hangs when
+    // stdin is a pipe (it tries to read a password). Instead, run `sudo -S true`
+    // with the piped password — a wrong password causes sudo to immediately fail
+    // reading from stdin (it doesn't fall back to cached credentials for -S).
+    // A correct password succeeds. The command runs under bash -c with piped stdin.
+    let shellCommandRef: ActiveShellCommand | undefined;
+    const result = await executeShellCommand('sudo -S true', {
+      password,
+      onStart: (proc) => {
+        shellCommandRef = {
+          command: 'sudo -S true',
+          proc,
+          interrupted: false,
+          interruptStage: 0,
+        };
+        this.host.setActiveShellCommand(shellCommandRef);
+        this.host.renderStatusBar();
+      },
+    });
+
+    if (shellCommandRef?.escalationTimer) {
+      clearTimeout(shellCommandRef.escalationTimer);
+    }
+    if (shellCommandRef && shellCommandRef.interrupted) {
+      result.interrupted = true;
+    }
+    if (this.host.activeShellCommand?.command === 'sudo -S true') {
+      this.host.setActiveShellCommand(null);
+    }
+
+    return result.exitCode === 0;
   }
 
   advancePendingExecution(): void {
@@ -229,14 +461,28 @@ export class ApprovalManager {
 
     try {
       if (action === 'a') {
+        this.host.state.pendingExecution.mode = 'allow-all';
         this.hideApprovalDialog();
         this.host.addMsg('Executing remaining commands.', '#888888');
         while (this.host.state.pendingExecution) {
           const block = this.host.state.pendingExecution.blocks[this.host.state.pendingExecution.index];
-          await this.runCommandBlock(block);
+          if (isSudoCommand(block.code)) {
+            if (platform === 'darwin') {
+              // macOS: native dialog handles auth, no TUI modal
+              await this.runCommandBlock(block);
+            } else {
+              // Linux: run-first pattern — execute without pre-check; if auth fails,
+              // runCommandBlockWithSudoRetry shows the TUI password dialog.
+              const ok = await this.runCommandBlockWithSudoRetry(block);
+              if (!ok) return; // password dialog shown — wait for user input
+            }
+          } else {
+            await this.runCommandBlock(block);
+          }
           this.advancePendingExecution();
         }
         this.restoreApprovalDraft();
+        this.host.renderStatusBar();
         return;
       }
 
@@ -244,13 +490,49 @@ export class ApprovalManager {
         this.hideApprovalDialog();
         this.host.addMsg('Skipped remaining commands.', '#888888');
         this.host.state.pendingExecution = null;
+        this.host.state.sudoPasswordInputText = '';
+        this.host.state.sudoPasswordCursorOffset = 0;
+        this.host.state.sessionSudoPassword = null;
+        this.host.state.sudoPasswordPrompt = null;
         this.restoreApprovalDraft();
         return;
       }
 
       if (action === 'y') {
         this.hideApprovalDialog();
-        const block = this.host.state.pendingExecution.blocks[this.host.state.pendingExecution.index];
+        const block = this.host.state.pendingExecution!.blocks[this.host.state.pendingExecution!.index];
+        this.host.state.pendingExecution.mode = 'ask';
+        if (isSudoCommand(block.code)) {
+          if (platform === 'darwin') {
+            // On macOS: run sudo directly and let the native Touch ID/password dialog
+            // handle authentication. No TUI modal needed. If the user cancels or enters
+            // the wrong password, sudo returns exit 1 and we report the failure.
+            await this.runCommandBlock(block);
+            this.advancePendingExecution();
+            if (this.host.state.pendingExecution) {
+              this.restoreApprovalDraft();
+              this.promptPendingExecution();
+            } else {
+              this.restoreApprovalDraft();
+              this.host.renderStatusBar();
+            }
+            return;
+          }
+          // Linux: run-first pattern — execute without pre-check; if auth fails,
+          // runCommandBlockWithSudoRetry shows the TUI password dialog.
+          const ok = await this.runCommandBlockWithSudoRetry(block);
+          if (!ok) return; // password dialog shown — wait for user input
+          this.advancePendingExecution();
+          if (this.host.state.pendingExecution) {
+            this.restoreApprovalDraft();
+            this.promptPendingExecution();
+          } else {
+            this.restoreApprovalDraft();
+            this.host.renderStatusBar();
+          }
+          return;
+        }
+        // Non-sudo command — run directly.
         await this.runCommandBlock(block);
         this.advancePendingExecution();
         if (this.host.state.pendingExecution) {
@@ -258,6 +540,7 @@ export class ApprovalManager {
           this.promptPendingExecution();
         } else {
           this.restoreApprovalDraft();
+          this.host.renderStatusBar();
         }
         return;
       }
@@ -271,14 +554,83 @@ export class ApprovalManager {
           this.promptPendingExecution();
         } else {
           this.restoreApprovalDraft();
+          this.host.renderStatusBar();
         }
         return;
       }
     } finally {
       this.host.state.approvalActionInFlight = false;
-      if (this.host.state.pendingExecution) {
-        this.restoreApprovalDraft();
+    }
+  }
+
+  /**
+   * Called when the user presses Enter on the sudo password dialog.
+   * Captures the password from the chat input, caches it, and re-enters
+   * the execution flow for the current sudo command.
+   */
+  async handleSudoPasswordConfirm(password: string): Promise<void> {
+    if (!this.host.state.sudoPasswordPrompt) return;
+    if (this.host.state.approvalActionInFlight) return;
+    if (!password) {
+      this.host.state.sudoRetryCount = Math.max(1, this.host.state.sudoRetryCount);
+      this.renderSudoPasswordDialog();
+      return;
+    }
+    this.host.state.approvalActionInFlight = true;
+
+    try {
+      // The `password` parameter is what the user typed in the TUI dialog.
+      // We use it directly — run the actual sudo command with the piped password
+      // and let isSudoAuthFailure detect whether it was correct.
+      const { command, index } = this.host.state.sudoPasswordPrompt!;
+      this.host.state.sudoPasswordPrompt = null;
+
+      this.clearSudoPasswordInput();
+      this.hideApprovalDialog();
+
+      // Linux-only: the password typed in the TUI dialog is piped to sudo -S.
+      // If auth fails (wrong password), isSudoAuthFailure re-prompts with
+      // sudoRetryCount already incremented (so the retry message shows).
+      // If auth succeeds, we clear it below.
+      this.host.state.pendingExecution = {
+        blocks: this.host.state.pendingExecution?.blocks ?? [],
+        index,
+        mode: this.host.state.pendingExecution?.mode ?? 'ask',
+      };
+
+      const block: CommandBlock = { language: 'bash', code: command, fullMatch: command };
+      const ok = await this.runCommandBlockWithSudoRetry(block, password ?? undefined);
+      if (ok) {
+        this.host.state.sudoRetryCount = 0; // only clear on success
       }
+      this.advancePendingExecution();
+
+      if (this.host.state.pendingExecution) {
+        if (this.host.state.pendingExecution.mode === 'allow-all') {
+          this.hideApprovalDialog();
+          while (this.host.state.pendingExecution) {
+            const nextBlock = this.host.state.pendingExecution.blocks[this.host.state.pendingExecution.index];
+            if (isSudoCommand(nextBlock.code)) {
+              // Use runCommandBlockWithSudoRetry so it reads sessionSudoPassword
+              // and re-prompts (Linux) or runs directly (macOS) as appropriate.
+              await this.runCommandBlockWithSudoRetry(nextBlock, this.host.state.sessionSudoPassword ?? undefined);
+            } else {
+              await this.runCommandBlock(nextBlock);
+            }
+            this.advancePendingExecution();
+          }
+          this.restoreApprovalDraft();
+          this.host.renderStatusBar();
+        } else {
+          this.restoreApprovalDraft();
+          this.promptPendingExecution();
+        }
+      } else {
+        this.restoreApprovalDraft();
+        this.host.renderStatusBar();
+      }
+    } finally {
+      this.host.state.approvalActionInFlight = false;
     }
   }
 
@@ -293,6 +645,13 @@ export class ApprovalManager {
     if (blocks.length === 0) {
       return;
     }
+
+    // Reset per-batch UI state only. sessionSudoPassword is intentionally kept
+    // across LLM responses — once the user enters it once, we reuse it for the
+    // remainder of the session without re-prompting.
+    this.host.state.sudoPasswordInputText = '';
+    this.host.state.sudoPasswordCursorOffset = 0;
+    this.host.state.sudoRetryCount = 0;
 
     this.host.state.pendingExecution = {
       blocks,

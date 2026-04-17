@@ -166,6 +166,7 @@ export class TUIApp {
   // UI nodes
   private chatNode!: MutableBoxNode;
   private chatNodeIds: string[] = [];
+  private inputRowNode!: MutableBoxNode;
   private cmdListBoxNode!: MutableBoxNode;
   private cmdListTextNode!: MutableTextNode;
   private statusBarTextNode!: MutableTextNode;
@@ -326,14 +327,18 @@ export class TUIApp {
   }
 
   private buildApprovalHost(): IApprovalHost {
+    const thisApp = this;
     return {
       state: this.approvalState,
-      activeShellCommand: this.activeShellCommand,
+      get activeShellCommand() { return thisApp.activeShellCommand; },
       setActiveShellCommand: (cmd) => { this.activeShellCommand = cmd; },
       inputBuffer: this.inputBuffer,
       setInputBuffer: (v) => { this.inputBuffer = v; },
       addMsg: (text, color) => this.chatManager.addMsg(text, color),
       renderStatusBar: () => this.renderStatusBar(),
+      updateFooterLayout: () => this.updateFooterLayout(),
+      pauseRenderer: () => this.renderer.pause(),
+      resumeRenderer: () => this.renderer.resume(),
       approvalDialogNode: this.approvalDialogNode,
       approvalDialogTextNode: this.approvalDialogTextNode,
       inputNode: this.inputNode,
@@ -549,6 +554,7 @@ export class TUIApp {
   private resolveLiveNodes(renderer: Awaited<ReturnType<typeof createCliRenderer>>): void {
     const find = (id: string) => renderer.root.findDescendantById(id);
 
+    this.inputRowNode = find('input-row') as unknown as MutableBoxNode;
     this.cmdListBoxNode = find('cmd-list-box') as unknown as MutableBoxNode;
     this.cmdListTextNode = find('command-palette') as unknown as MutableTextNode;
     this.statusBarTextNode = find('status-bar-text') as unknown as MutableTextNode;
@@ -579,7 +585,7 @@ export class TUIApp {
     this.root = this.renderer.root as unknown as BoxRenderable;
 
     // Validate
-    if (!this.cmdListBoxNode || !this.cmdListTextNode || !this.statusBarTextNode || !this.statusBarStatsNode ||
+    if (!this.inputRowNode || !this.cmdListBoxNode || !this.cmdListTextNode || !this.statusBarTextNode || !this.statusBarStatsNode ||
         !this.headerTextNode || !this.inputNode || !this.chatNode || !this.approvalDialogNode || !this.approvalDialogTextNode ||
         !this.mcpModalNode || !this.mcpModalTextNode || !this.mcpDetailsModalNode || !this.mcpDetailsHeaderBox || !this.mcpDetailsHeaderText || !this.mcpDetailsScrollBox || !this.mcpDetailsModalTextNode || !this.mcpDetailsFooterBox || !this.mcpDetailsModalFooterTextNode ||
         !this.providerModalNode || !this.providerModalTextNode || !this.modelModalNode || !this.modelModalTitleTextNode ||
@@ -703,6 +709,93 @@ export class TUIApp {
         return true;
       }
 
+      // Sudo password dialog (shown inside approval dialog area)
+      if (this.approvalState.sudoPasswordPrompt) {
+        if (isEnter(sequence)) {
+          const password = this.approvalState.sudoPasswordInputText;
+          void this.approvalManager.handleSudoPasswordConfirm(password);
+          return true;
+        }
+        if (isEscape(sequence)) {
+          this.approvalState.sudoPasswordPrompt = null;
+          this.approvalState.sessionSudoPassword = null;
+          this.approvalState.sudoPasswordInputText = '';
+          this.approvalState.sudoPasswordCursorOffset = 0;
+          // Cancel only this sudo prompt — advance to next block (or end if last)
+          this.approvalManager.advancePendingExecution();
+          if (this.approvalState.pendingExecution) {
+            void this.approvalManager.hideApprovalDialog();
+            this.approvalManager.restoreApprovalDraft();
+            this.approvalManager.promptPendingExecution();
+          } else {
+            void this.approvalManager.hideApprovalDialog();
+            this.approvalManager.restoreApprovalDraft();
+          }
+          return true;
+        }
+        if (isBackspace(sequence)) {
+          const offset = this.approvalState.sudoPasswordCursorOffset;
+          if (offset > 0) {
+            this.approvalState.sudoPasswordInputText =
+              this.approvalState.sudoPasswordInputText.slice(0, offset - 1) +
+              this.approvalState.sudoPasswordInputText.slice(offset);
+            this.approvalState.sudoPasswordCursorOffset = offset - 1;
+            this.approvalManager.renderSudoPasswordDialog();
+          }
+          return true;
+        }
+        if (isArrowLeft(sequence)) {
+          this.approvalState.sudoPasswordCursorOffset = Math.max(0, this.approvalState.sudoPasswordCursorOffset - 1);
+          this.approvalManager.renderSudoPasswordDialog();
+          return true;
+        }
+        if (isArrowRight(sequence)) {
+          this.approvalState.sudoPasswordCursorOffset = Math.min(
+            this.approvalState.sudoPasswordInputText.length,
+            this.approvalState.sudoPasswordCursorOffset + 1,
+          );
+          this.approvalManager.renderSudoPasswordDialog();
+          return true;
+        }
+        if (isCtrlA(sequence)) {
+          this.approvalState.sudoPasswordCursorOffset = 0;
+          this.approvalManager.renderSudoPasswordDialog();
+          return true;
+        }
+        if (isCtrlE(sequence)) {
+          this.approvalState.sudoPasswordCursorOffset = this.approvalState.sudoPasswordInputText.length;
+          this.approvalManager.renderSudoPasswordDialog();
+          return true;
+        }
+        if (isCtrlU(sequence)) {
+          this.approvalState.sudoPasswordInputText = '';
+          this.approvalState.sudoPasswordCursorOffset = 0;
+          this.approvalManager.renderSudoPasswordDialog();
+          return true;
+        }
+        {
+          const char = getChar(sequence);
+          if (char) {
+            const now = Date.now();
+            // Debounce: ignore duplicate key events within 50ms (Linux sends
+            // the same keypress as both raw char and Kitty escape sequence)
+            if (now - this.approvalState.sudoLastKeyAt > 50 || char !== this.approvalState.sudoLastKeyChar) {
+              this.approvalState.sudoLastKeyChar = char;
+              this.approvalState.sudoLastKeyAt = now;
+              const offset = this.approvalState.sudoPasswordCursorOffset;
+              this.approvalState.sudoPasswordInputText =
+                this.approvalState.sudoPasswordInputText.slice(0, offset) +
+                char +
+                this.approvalState.sudoPasswordInputText.slice(offset);
+              this.approvalState.sudoPasswordCursorOffset = offset + char.length;
+              this.approvalManager.renderSudoPasswordDialog();
+            }
+            return true;
+          }
+        }
+        return true;
+      }
+
       // Approval dialog
       if (!this.approvalState.pendingExecution) return false;
       if (isCtrlC(sequence)) return false;
@@ -720,6 +813,10 @@ export class TUIApp {
     // Input handlers
     this.inputNode.onContentChange = () => {
       if (this.mcpState.mcpModalOpen || this.modalsState.providerModalOpen || this.modalsState.modelModalOpen || this.modalsState.sessionsModalOpen) return;
+      // Sudo password dialog: allow typing (captures the password)
+      if (this.approvalState.sudoPasswordPrompt) {
+        return;
+      }
       if (this.approvalState.pendingExecution) {
         if (this.inputNode.plainText !== this.approvalState.approvalDraftText) {
           this.inputNode.setText(this.approvalState.approvalDraftText);
@@ -1362,9 +1459,13 @@ export class TUIApp {
       this.chatManager.addMsg(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`, '#ff4444');
     }
     this.root.requestRender();
+    this.renderStatusBar();
   }
 
   private updateFooterLayout() {
+    const sudoPromptActive = !!this.approvalState.sudoPasswordPrompt;
+    this.inputRowNode.visible = !sudoPromptActive;
+    this.cmdListBoxNode.visible = !sudoPromptActive && this.palette.open;
     this.root.requestRender();
   }
 

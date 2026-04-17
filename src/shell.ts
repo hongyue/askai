@@ -18,6 +18,21 @@ export type ExecutionDecision = 'allow' | 'reject' | 'allow-all' | 'reject-all';
 
 export interface ExecuteCommandOptions {
   onStart?: (proc: ReturnType<typeof Bun.spawn>) => void;
+  /** Password to pipe to stdin (used for sudo commands) */
+  password?: string;
+  interactive?: boolean;
+}
+
+interface PreparedCommand {
+  command: string;
+}
+
+function stripLeadingSudo(command: string): string | null {
+  const trimmed = command.trimStart();
+  if (!trimmed.startsWith('sudo ') && !trimmed.startsWith('sudo\t')) {
+    return null;
+  }
+  return trimmed.slice(4).trimStart();
 }
 
 export function detectCodeBlocks(text: string): CommandBlock[] {
@@ -76,20 +91,65 @@ export async function askForExecution(block: CommandBlock): Promise<ExecutionDec
   return execute;
 }
 
+async function prepareCommandForExecution(command: string, password?: string): Promise<PreparedCommand> {
+  if (!password) {
+    return { command };
+  }
+
+  const remainder = stripLeadingSudo(command);
+  if (remainder === null) {
+    return { command };
+  }
+
+  const leadingWhitespaceLength = command.length - command.trimStart().length;
+  const leadingWhitespace = command.slice(0, leadingWhitespaceLength);
+  return {
+    command: `${leadingWhitespace}sudo -S -p '' ${remainder}`,
+  };
+}
+
 export async function executeCommand(command: string, options?: ExecuteCommandOptions): Promise<CommandResult> {
   try {
-    const proc = Bun.spawn(['bash', '-c', command], {
-      detached: true,
-      stdin: 'ignore',
-      stdout: 'pipe',
-      stderr: 'pipe',
+    const prepared = await prepareCommandForExecution(command, options?.password);
+    console.error('[SHELL DEBUG] prepareCommandForExecution:', command, '| password:', options?.password ? '(set)' : 'null', '| prepared.command:', prepared.command);
+    const useDetachedProcess = !options?.password && !options?.interactive;
+    const proc = Bun.spawn(['bash', '-c', prepared.command], {
+      // Password-driven sudo execution is more reliable on macOS without
+      // detaching into a separate session.
+      detached: useDetachedProcess,
+      stdin: options?.interactive ? 'inherit' : 'pipe',
+      stdout: options?.interactive ? 'inherit' : 'pipe',
+      stderr: options?.interactive ? 'inherit' : 'pipe',
     });
     options?.onStart?.(proc);
-    
+
+    // Pipe password to stdin if provided (sudo commands)
+    // Must await the write before it completes — with detached:true the parent
+    // process exits immediately, so the pipe write must finish before we return.
+    if (options?.password) {
+      const encoder = new TextEncoder();
+      if (!proc.stdin) {
+        throw new Error('stdin is not available for passworded command execution');
+      }
+      await proc.stdin.write(encoder.encode(options.password + '\n'));
+      console.error('[SHELL DEBUG] Piped password to sudo:', options.password ? '(set)' : 'null');
+      proc.stdin.end();
+    }
+
+    if (options?.interactive) {
+      const exitCode = await proc.exited;
+      return {
+        command,
+        stdout: '',
+        stderr: '',
+        exitCode,
+      };
+    }
+
     const stdout = await new Response(proc.stdout).text();
     const stderr = await new Response(proc.stderr).text();
     const exitCode = await proc.exited;
-    
+
     return {
       command,
       stdout: stdout.trim(),
