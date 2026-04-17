@@ -7,17 +7,32 @@ description: Cross-platform sudo password handling in TUI applications — macOS
 
 ## Proven Approach
 
-**Run first, detect failure, show TUI dialog.** Do NOT pre-check with `sudo -n true` — it's unreliable and can hang.
+**Run first, detect failure, show TUI dialog.** Do NOT pre-check with `sudo -n true` — it's unreliable and can short-circuit the cache.
 
 ```
-sudo command → executeShellCommand("sudo <cmd>")  // no -S, no password
-  → fails on both platforms
-  → isSudoAuthFailure(result) detects the failure
-  → show TUI password dialog
-  → user enters password
-  → validateSudoPassword (sudo -k true with piped password)
-  → runCommandBlock(block, password) with sudo -S
+# First attempt: use cached sessionSudoPassword if available
+runCommandBlockWithSudoRetry(block)
+  → password = sessionSudoPassword ?? null
+  → sudo -S -p '' <cmd>  (with piped password if set, else no stdin)
+  → fails auth
+    → sudoRetryCount++ (becomes 1)
+    → show TUI dialog (NO "Incorrect password" message yet)
+    → user enters password
+    → runCommandBlockWithSudoRetry(block, password)  # isRetry=true
+    → sudo -S -p '' <cmd> with piped password
+    → fails auth again
+      → sudoRetryCount++ (becomes 2)
+      → show TUI dialog WITH "Incorrect password" message
+      → user enters correct password
+      → succeeds → sessionSudoPassword = password, sudoRetryCount = 0
+    → succeeds → sessionSudoPassword = password, sudoRetryCount = 0
+  → succeeds (no password needed or cached creds)
+    → sessionSudoPassword stays null
 ```
+
+**macOS**: native Touch ID/password dialog — run `sudo <cmd>` directly (no `-S`, no piped stdin). sudo uses its own credential cache.
+
+**Linux**: TUI modal + `sudo -S` with piped stdin. `sudo -S` with piped stdin works reliably on Linux (unlike macOS where it hangs).
 
 ## Critical Pitfalls
 
@@ -45,19 +60,25 @@ The pattern `!sequence.includes('\x1b')` blocks ALL character input on Linux bec
 
 **Fix**: Use `!isEscape(sequence)` instead — only blocks the actual Escape key.
 
-### 4. Pass password to command execution, don't rely on sudo cache
+## Cross-Response Caching
 
-After `validateSudoPassword` (which runs `sudo -k true`), the sudo credential is cached. But:
-- Don't clear `sessionSudoPassword` before running the command
-- Pass `password` to `runCommandBlock(block, password)` so it uses `sudo -S`
-- Without `-S`, sudo falls back to native prompt on cache expiry
+`sessionSudoPassword` must survive across LLM responses. Only clear it on:
+- **Auth failure** (user entered wrong password — allow retry with correct one)
+- **'x' action** (explicit skip — user chose not to proceed)
+- **Session end**
 
-### 5. Remove native OS prompt fallback for consistent UX
-
-`stdin: 'inherit'` hands control to the OS native prompt (GUI dialog on macOS, terminal prompt on Linux). For TUI apps, always use piped password with `sudo -S`.
+NEVER clear `sessionSudoPassword` in:
+- `maybeQueueCommandExecution` (fires on each new LLM response)
+- 'y' or 'n' action handlers after a successful sudo
 
 ## Code Locations
 
-- `src/shell.ts`: `executeCommand` — handles `sudo -S` transformation and password piping
-- `src/ui/approval.ts`: `isSudoAuthFailure` — failure detection, `runCommandBlockWithSudoRetry` — retry flow
-- `src/app.ts`: sudo password dialog keyboard handler (lines ~770-790)
+- `src/ui/approval.ts`: `isSudoAuthFailure` — failure detection; `runCommandBlockWithSudoRetry` — retry flow with `sudo -S`; `handleSudoPasswordConfirm` — TUI password handler; `renderSudoPasswordDialog` — password dialog rendering; `sudoRetryCount` — retry counter (only > 1 shows "Incorrect password")
+- `src/shell.ts`: `executeShellCommand` — runs sudo with `-S` and piped stdin
+- `src/app.ts`: sudo keyboard handler and state management
+
+## Platform Differences
+
+- **macOS**: `sudo -S` hangs when stdin is a pipe (sudo tries to read from tty first). Run `sudo <cmd>` directly and let native auth dialog handle it.
+- **Linux**: `sudo -S` with piped stdin works correctly. No native dialog — always use TUI modal.
+- **Both**: `sudo -k` hangs when stdin is a pipe — do NOT use `sudo -k` for validation.
