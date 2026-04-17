@@ -151,7 +151,7 @@ export function createModalsState(): ModalsState {
     sessionsRenaming: null,
     deleteSessionConfirm: null,
     sessionsFilter: { value: '', cursorOffset: 0 },
-    sessionsFilterFocus: true,
+    sessionsFilterFocus: false,
   };
 }
 

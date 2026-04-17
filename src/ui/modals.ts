@@ -121,9 +121,9 @@ export function formatProviderFormSelectValue(value: string, focused: boolean): 
   return chunks;
 }
 
-export function formatFilterValue(value: string, cursorOffset: number, active: boolean): any[] {
+export function formatFilterValue(value: string, cursorOffset: number, active: boolean, placeholder = '(type to filter)'): any[] {
   if (!active && value.length === 0) {
-    return [white('(type to filter)')];
+    return [white(placeholder)];
   }
   if (!active) {
     return [white(value)];
@@ -525,7 +525,7 @@ export function renderSessionsModal(ctx: ModalRenderContext): void {
   const headerChunks: any[] = [white('Sessions')];
   headerChunks.push(white('\n\n'));
   headerChunks.push(white('Filter  '));
-  const filterValueChunks = formatFilterValue(ctx.sessionsFilter.value, ctx.sessionsFilter.cursorOffset, ctx.sessionsFilterFocus);
+  const filterValueChunks = formatFilterValue(ctx.sessionsFilter.value, ctx.sessionsFilter.cursorOffset, ctx.sessionsFilterFocus, '(type to filter sessions)');
   headerChunks.push(...filterValueChunks);
   headerChunks.push(white('\n\n'));
 
