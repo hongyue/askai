@@ -355,7 +355,6 @@ export class ApprovalManager {
     // If sessionSudoPassword is null/undefined, run without password — if sudo
     // needs a password it'll fail and isSudoAuthFailure will prompt the TUI dialog.
     let password = isRetry ? passwordForRetry : this.host.state.sessionSudoPassword;
-    console.error("[DEBUG] password for sudo:", password ? "(set)" : "null", "| isRetry:", isRetry, "| sessionSudoPassword:", this.host.state.sessionSudoPassword ? "(set)" : "null");
 
     let shellCommandRef: ActiveShellCommand | undefined;
     const result = await executeShellCommand(block.code, {
@@ -387,7 +386,6 @@ export class ApprovalManager {
       // Cache the password so subsequent sudo commands in the same batch use it.
       if (isRetry && passwordForRetry) {
         this.host.state.sessionSudoPassword = passwordForRetry;
-        console.error("[DEBUG] CACHED PASSWORD in sessionSudoPassword");
       }
       // Format and display result normally
       for (const line of formatCommandResult(result).split('\n')) {

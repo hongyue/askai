@@ -525,7 +525,7 @@ export function renderSessionsModal(ctx: ModalRenderContext): void {
   const headerChunks: any[] = [white('Sessions')];
   headerChunks.push(white('\n\n'));
   headerChunks.push(white('Filter  '));
-  const filterValueChunks = formatFilterValue(ctx.sessionsFilter.value, ctx.sessionsFilter.cursorOffset, ctx.sessionsFilterFocus, '(type to filter sessions)');
+  const filterValueChunks = formatFilterValue(ctx.sessionsFilter.value, ctx.sessionsFilter.cursorOffset, ctx.sessionsFilterFocus);
   headerChunks.push(...filterValueChunks);
   headerChunks.push(white('\n\n'));
 

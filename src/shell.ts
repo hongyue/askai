@@ -111,7 +111,6 @@ async function prepareCommandForExecution(command: string, password?: string): P
 export async function executeCommand(command: string, options?: ExecuteCommandOptions): Promise<CommandResult> {
   try {
     const prepared = await prepareCommandForExecution(command, options?.password);
-    console.error('[SHELL DEBUG] prepareCommandForExecution:', command, '| password:', options?.password ? '(set)' : 'null', '| prepared.command:', prepared.command);
     const useDetachedProcess = !options?.password && !options?.interactive;
     const proc = Bun.spawn(['bash', '-c', prepared.command], {
       // Password-driven sudo execution is more reliable on macOS without
@@ -132,7 +131,6 @@ export async function executeCommand(command: string, options?: ExecuteCommandOp
         throw new Error('stdin is not available for passworded command execution');
       }
       await proc.stdin.write(encoder.encode(options.password + '\n'));
-      console.error('[SHELL DEBUG] Piped password to sudo:', options.password ? '(set)' : 'null');
       proc.stdin.end();
     }
 
