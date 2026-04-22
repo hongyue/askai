@@ -258,9 +258,9 @@ export class ChatManager {
         this.ensureActiveTurn(turnId);
         const responseStartedAt = Date.now();
         const response = await getAssistantResponse(
-          this.host.provider,
+          this.host.runtime.getProvider(),
           this.host.state.messages,
-          this.host.providerTools,
+          this.host.runtime.getProviderTools(),
           { signal: controller.signal },
         );
         this.ensureActiveTurn(turnId);
