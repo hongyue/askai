@@ -194,7 +194,10 @@ export class TUIApp {
   private modelModalFilterTextNode!: MutableTextNode;
   private modelModalModelsTextNode!: MutableTextNode;
   private sessionsModalNode!: MutableBoxNode;
-  private sessionsModalTextNode!: MutableTextNode;
+  private sessionsModalHeaderTextNode!: MutableTextNode;
+  private sessionsModalScrollBox!: MutableBoxNode;
+  private sessionsModalBodyTextNode!: MutableTextNode;
+  private sessionsModalFooterTextNode!: MutableTextNode;
   private toastNode!: MutableBoxNode;
   private toastTextNode!: MutableTextNode;
   private root!: MutableBoxNode;
@@ -525,11 +528,17 @@ export class TUIApp {
     modelModal.add(modelModalContentRow);
 
     const sessionsModal = Box({
-      id: 'sessions-modal', position: 'absolute', width: '78%', left: '11%', top: '12%', height: 'auto',
+      id: 'sessions-modal', position: 'absolute', width: '78%', left: '11%', top: '12%', height: 22,
       flexDirection: 'column', visible: false, backgroundColor: '#141414', padding: 1, border: true, borderColor: '#6d8f5b',
     });
-    const sessionsModalText = Text({ id: 'sessions-modal-text', content: stringToStyledText(''), fg: '#d8d8d8', selectionBg: selectionHighlight.bg, selectionFg: selectionHighlight.fg });
-    sessionsModal.add(sessionsModalText);
+    const sessionsModalHeaderText = Text({ id: 'sessions-modal-header-text', content: stringToStyledText(''), fg: '#d8d8d8', selectionBg: selectionHighlight.bg, selectionFg: selectionHighlight.fg });
+    const sessionsModalScrollBox = ScrollBox({ id: 'sessions-modal-body', width: '100%', flexGrow: 1, minHeight: 0, scrollY: true, stickyScroll: false, marginTop: 1, marginBottom: 1 });
+    const sessionsModalBodyText = Text({ id: 'sessions-modal-body-text', content: stringToStyledText(''), fg: '#d8d8d8', selectionBg: selectionHighlight.bg, selectionFg: selectionHighlight.fg });
+    const sessionsModalFooterText = Text({ id: 'sessions-modal-footer-text', content: stringToStyledText(''), fg: '#8f8f8f', selectionBg: selectionHighlight.bg, selectionFg: selectionHighlight.fg });
+    sessionsModal.add(sessionsModalHeaderText);
+    sessionsModalScrollBox.add(sessionsModalBodyText);
+    sessionsModal.add(sessionsModalScrollBox);
+    sessionsModal.add(sessionsModalFooterText);
 
     const toast = Box({
       id: 'toast',
@@ -608,7 +617,10 @@ export class TUIApp {
     this.modelModalFilterTextNode = find('model-modal-filter-text') as unknown as MutableTextNode;
     this.modelModalModelsTextNode = find('model-modal-models-text') as unknown as MutableTextNode;
     this.sessionsModalNode = find('sessions-modal') as unknown as MutableBoxNode;
-    this.sessionsModalTextNode = find('sessions-modal-text') as unknown as MutableTextNode;
+    this.sessionsModalHeaderTextNode = find('sessions-modal-header-text') as unknown as MutableTextNode;
+    this.sessionsModalScrollBox = find('sessions-modal-body') as unknown as MutableBoxNode;
+    this.sessionsModalBodyTextNode = find('sessions-modal-body-text') as unknown as MutableTextNode;
+    this.sessionsModalFooterTextNode = find('sessions-modal-footer-text') as unknown as MutableTextNode;
     this.toastNode = find('toast') as unknown as MutableBoxNode;
     this.toastTextNode = find('toast-text') as unknown as MutableTextNode;
     this.root = this.renderer.root as unknown as MutableBoxNode;
@@ -619,7 +631,7 @@ export class TUIApp {
         !this.mcpModalNode || !this.mcpModalTextNode || !this.mcpDetailsModalNode || !this.mcpDetailsHeaderBox || !this.mcpDetailsHeaderText || !this.mcpDetailsScrollBox || !this.mcpDetailsModalTextNode || !this.mcpDetailsFooterBox || !this.mcpDetailsModalFooterTextNode ||
         !this.providerModalNode || !this.providerModalTextNode || !this.modelModalNode || !this.modelModalTitleTextNode ||
         !this.modelModalProvidersTextNode || !this.modelModalFilterTextNode || !this.modelModalModelsTextNode ||
-        !this.sessionsModalNode || !this.sessionsModalTextNode || !this.toastNode || !this.toastTextNode) {
+        !this.sessionsModalNode || !this.sessionsModalHeaderTextNode || !this.sessionsModalScrollBox || !this.sessionsModalBodyTextNode || !this.sessionsModalFooterTextNode || !this.toastNode || !this.toastTextNode) {
       throw new Error('Failed to initialize TUI render tree');
     }
 
@@ -1110,7 +1122,10 @@ export class TUIApp {
     this.modalsState.sessionsFilter = { value: '', cursorOffset: 0 };
     this.modalsState.sessionsScrollOffset = 0;
     this.sessionsModalNode.visible = false;
-    this.sessionsModalTextNode.content = stringToStyledText('');
+    this.sessionsModalHeaderTextNode.content = stringToStyledText('');
+    this.sessionsModalBodyTextNode.content = stringToStyledText('');
+    this.sessionsModalFooterTextNode.content = stringToStyledText('');
+    this.sessionsModalScrollBox.scrollTo?.({ x: 0, y: 0 });
     this.root.requestRender();
     this.inputNode.focus();
   }
@@ -1205,7 +1220,10 @@ export class TUIApp {
       modelModalFilterTextNode: this.modelModalFilterTextNode,
       modelModalModelsTextNode: this.modelModalModelsTextNode,
       sessionsModalNode: this.sessionsModalNode,
-      sessionsModalTextNode: this.sessionsModalTextNode,
+      sessionsModalHeaderTextNode: this.sessionsModalHeaderTextNode,
+      sessionsModalScrollBox: this.sessionsModalScrollBox,
+      sessionsModalBodyTextNode: this.sessionsModalBodyTextNode,
+      sessionsModalFooterTextNode: this.sessionsModalFooterTextNode,
       inputNode: this.inputNode,
       root: this.root,
       getProviderSlots: () => this.modalsManager.getProviderSlots(),
@@ -1239,6 +1257,7 @@ export class TUIApp {
       sessionsList: this.modalsState.sessionsList,
       sessionsSelectedIndex: this.modalsState.sessionsSelectedIndex,
       sessionsScrollOffset: this.modalsState.sessionsScrollOffset,
+      setSessionsScrollOffset: (offset) => { this.modalsState.sessionsScrollOffset = offset; },
       sessionsRenaming: this.modalsState.sessionsRenaming,
       deleteSessionConfirm: this.modalsState.deleteSessionConfirm,
       sessionsFilter: this.modalsState.sessionsFilter,

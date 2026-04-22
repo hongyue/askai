@@ -38,7 +38,10 @@ export interface ModalRenderContext {
   modelModalFilterTextNode: MutableTextNode;
   modelModalModelsTextNode: MutableTextNode;
   sessionsModalNode: MutableBoxNode;
-  sessionsModalTextNode: MutableTextNode;
+  sessionsModalHeaderTextNode: MutableTextNode;
+  sessionsModalScrollBox: MutableBoxNode;
+  sessionsModalBodyTextNode: MutableTextNode;
+  sessionsModalFooterTextNode: MutableTextNode;
   inputNode: MutableInputNode;
   root: { requestRender(): void };
 
@@ -74,6 +77,7 @@ export interface ModalRenderContext {
   sessionsList: SessionSummary[];
   sessionsSelectedIndex: number;
   sessionsScrollOffset: number;
+  setSessionsScrollOffset(offset: number): void;
   sessionsRenaming: { id: string; value: string; cursorOffset: number } | null;
   deleteSessionConfirm: { id: string } | null;
   sessionsFilter: FilterState;
@@ -465,7 +469,9 @@ export function renderModelModal(ctx: ModalRenderContext): void {
 export function renderSessionsModal(ctx: ModalRenderContext): void {
   if (!ctx.sessionsModalOpen) {
     ctx.sessionsModalNode.visible = false;
-    ctx.sessionsModalTextNode.content = stringToStyledText('');
+    ctx.sessionsModalHeaderTextNode.content = stringToStyledText('');
+    ctx.sessionsModalBodyTextNode.content = stringToStyledText('');
+    ctx.sessionsModalFooterTextNode.content = stringToStyledText('');
     ctx.root.requestRender();
     ctx.inputNode.focus();
     return;
@@ -474,16 +480,16 @@ export function renderSessionsModal(ctx: ModalRenderContext): void {
   if (ctx.deleteSessionConfirm) {
     const session = ctx.sessionsList.find(s => s.id === ctx.deleteSessionConfirm!.id);
     const title = session ? `"${session.title}"` : 'this session';
-    const lines = [
+    ctx.sessionsModalHeaderTextNode.content = stringToStyledText('Sessions');
+    ctx.sessionsModalBodyTextNode.content = stringToStyledText([
       'Delete session',
       '',
       `Delete ${title}? This cannot be undone.`,
-      '',
-      'enter confirm   esc cancel',
-    ];
-    ctx.sessionsModalTextNode.content = stringToStyledText(lines.join('\n'));
+    ].join('\n'));
+    ctx.sessionsModalFooterTextNode.content = stringToStyledText('enter confirm   esc cancel');
     ctx.sessionsModalNode.visible = true;
     if (ctx.inputNode.blur) ctx.inputNode.blur();
+    ctx.sessionsModalScrollBox.scrollTo?.({ x: 0, y: 0 });
     ctx.root.requestRender();
     return;
   }
@@ -502,18 +508,27 @@ export function renderSessionsModal(ctx: ModalRenderContext): void {
     } else {
       cursorChunks = [white(val), bgWhite(black(' '))];
     }
-    const header = stringToStyledText('Sessions\n\nRename session: ');
-    const footer = stringToStyledText('\n\nenter confirm   esc cancel');
-    ctx.sessionsModalTextNode.content = new StyledText([
-      ...header.chunks,
+    ctx.sessionsModalHeaderTextNode.content = stringToStyledText('Sessions');
+    ctx.sessionsModalBodyTextNode.content = new StyledText([
+      ...stringToStyledText('Rename session: ').chunks,
       ...cursorChunks,
-      ...footer.chunks,
     ]);
+    ctx.sessionsModalFooterTextNode.content = stringToStyledText('enter confirm   esc cancel');
     ctx.sessionsModalNode.visible = true;
     if (ctx.inputNode.blur) ctx.inputNode.blur();
+    ctx.sessionsModalScrollBox.scrollTo?.({ x: 0, y: 0 });
     ctx.root.requestRender();
     return;
   }
+
+  const headerChunks: any[] = [];
+  headerChunks.push(white('Filter  '));
+  const filterValueChunks = formatFilterValue(ctx.sessionsFilter.value, ctx.sessionsFilter.cursorOffset, ctx.sessionsFilterFocus);
+  headerChunks.push(...filterValueChunks);
+  ctx.sessionsModalHeaderTextNode.content = new StyledText([
+    ...stringToStyledText('Sessions\n').chunks,
+    ...headerChunks,
+  ]);
 
   // Apply filter
   const normalizedFilter = ctx.sessionsFilter.value.trim().toLowerCase();
@@ -521,24 +536,13 @@ export function renderSessionsModal(ctx: ModalRenderContext): void {
     ? ctx.sessionsList.filter(s => s.title.toLowerCase().includes(normalizedFilter))
     : ctx.sessionsList;
 
-  // Build header with filter input
-  const headerChunks: any[] = [white('Sessions')];
-  headerChunks.push(white('\n\n'));
-  headerChunks.push(white('Filter  '));
-  const filterValueChunks = formatFilterValue(ctx.sessionsFilter.value, ctx.sessionsFilter.cursorOffset, ctx.sessionsFilterFocus);
-  headerChunks.push(...filterValueChunks);
-  headerChunks.push(white('\n\n'));
-
   if (filteredSessions.length === 0) {
     const noResults = normalizedFilter ? 'No matching sessions' : 'No saved sessions yet';
-    const helpText = 'esc close';
-    const body = stringToStyledText(`${noResults}\n\n${helpText}`);
-    ctx.sessionsModalTextNode.content = new StyledText([
-      ...headerChunks,
-      ...body.chunks,
-    ]);
+    ctx.sessionsModalBodyTextNode.content = stringToStyledText(noResults);
+    ctx.sessionsModalFooterTextNode.content = stringToStyledText('esc close');
     ctx.sessionsModalNode.visible = true;
     if (ctx.inputNode.blur) ctx.inputNode.blur();
+    ctx.sessionsModalScrollBox.scrollTo?.({ x: 0, y: 0 });
     ctx.root.requestRender();
     return;
   }
@@ -560,48 +564,24 @@ export function renderSessionsModal(ctx: ModalRenderContext): void {
   if (selectedIndex < -1) selectedIndex = -1;
   if (selectedIndex >= totalSessions) selectedIndex = totalSessions - 1;
 
-  // Calculate scroll offset
-  const maxOffset = Math.max(0, totalSessions - sessionsVisibleLineCount);
-  let scrollOffset = Math.max(0, Math.min(ctx.sessionsScrollOffset, maxOffset));
-  if (selectedIndex >= 0 && selectedIndex < scrollOffset) {
-    scrollOffset = selectedIndex;
-  } else if (selectedIndex >= scrollOffset + sessionsVisibleLineCount) {
-    scrollOffset = selectedIndex - sessionsVisibleLineCount + 1;
-  }
-  scrollOffset = Math.max(0, Math.min(scrollOffset, maxOffset));
-
-  // Render visible groups
-  const lineChunks: any[] = [...headerChunks];
-
-  // Map scroll offset to group/session positions
-  let flatCount = 0;
-  let startFlat = scrollOffset;
-  let endFlat = scrollOffset + sessionsVisibleLineCount;
+  const lineChunks: any[] = [];
+  let lineNumber = 0;
+  let selectedLine = 0;
 
   for (let gi = 0; gi < groups.length; gi++) {
     const group = groups[gi];
-    const groupStartFlat = flatCount;
-    const groupEndFlat = flatCount + group.sessions.length;
-    flatCount = groupEndFlat;
-
-    // Check if this group overlaps with the visible range
-    if (groupEndFlat <= startFlat || groupStartFlat >= endFlat) continue;
-
-    const isFirstVisibleGroup = lineChunks.length === headerChunks.length;
-
-    // Gap between groups
-    if (!isFirstVisibleGroup) {
+    if (gi > 0) {
       lineChunks.push(white('\n'));
+      lineNumber += 1;
     }
-    // Group header with light purple color
+
     lineChunks.push(fg('#b088f9')(`  ${group.dateLabel}`));
     lineChunks.push(white('\n\n'));
+    lineNumber += 2;
 
     for (let si = 0; si < group.sessions.length; si++) {
       const s = group.sessions[si];
-      const globalFlatIdx = groupStartFlat + si;
-      if (globalFlatIdx < startFlat || globalFlatIdx >= endFlat) continue;
-
+      const globalFlatIdx = flatIndexToSession.findIndex(item => item.groupIdx === gi && item.sessionIdx === si);
       const isSel = globalFlatIdx === selectedIndex;
       const marker = isSel ? '> ' : '  ';
       const isActive = s.id === ctx.currentSession.id;
@@ -610,25 +590,31 @@ export function renderSessionsModal(ctx: ModalRenderContext): void {
       const msgs = `${s.message_count} msgs`;
       const title = s.title.slice(0, 45).padEnd(45);
 
+      if (isSel) {
+        selectedLine = lineNumber;
+      }
+
       lineChunks.push(white(marker));
       lineChunks.push(white(`${title} ${time.padStart(10)} ${msgs.padStart(10)}${activeTag}`));
       lineChunks.push(white('\n'));
+      lineNumber += 1;
     }
   }
 
-  // Scroll indicator
-  if (totalSessions > sessionsVisibleLineCount) {
-    lineChunks.push(white('\n'));
-    lineChunks.push(fg('#6a6a6a')(`Scroll ${scrollOffset + 1}-${Math.min(scrollOffset + sessionsVisibleLineCount, totalSessions)} / ${totalSessions}`));
-    lineChunks.push(white('\n'));
-  }
-
-  // Help text
-  lineChunks.push(white('\n'));
-  lineChunks.push(white('↑/↓ select   enter resume   ctrl+r rename   ctrl+d delete'));
-
-  ctx.sessionsModalTextNode.content = new StyledText(lineChunks);
+  ctx.sessionsModalBodyTextNode.content = new StyledText(lineChunks);
+  ctx.sessionsModalFooterTextNode.content = stringToStyledText('↑/↓ select   enter resume   ctrl+r rename   ctrl+d delete');
   ctx.sessionsModalNode.visible = true;
   if (ctx.inputNode.blur) ctx.inputNode.blur();
+  const visibleLineCount = Math.max(1, ctx.sessionsModalScrollBox.viewport?.height ?? sessionsVisibleLineCount);
+  const maxOffset = Math.max(0, lineNumber - visibleLineCount);
+  let scrollOffset = Math.max(0, Math.min(ctx.sessionsScrollOffset, maxOffset));
+  if (selectedIndex >= 0 && selectedLine < scrollOffset) {
+    scrollOffset = selectedLine;
+  } else if (selectedIndex >= 0 && selectedLine >= scrollOffset + visibleLineCount) {
+    scrollOffset = selectedLine - visibleLineCount + 1;
+  }
+  ctx.setSessionsScrollOffset(scrollOffset);
+  ctx.sessionsModalScrollBox.scrollTo?.({ x: 0, y: scrollOffset });
   ctx.root.requestRender();
+  return;
 }
