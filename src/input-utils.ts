@@ -43,6 +43,11 @@ export const presetProviderMeta = [
   { id: 'openrouter', displayName: 'OpenRouter', type: 'openai-compatible' as ProviderType, baseUrl: 'https://openrouter.ai/api/v1', defaultModel: 'openai/gpt-4o-mini' },
 ] as const;
 
+export const selectionHighlight = {
+  bg: '#2d5f73',
+  fg: '#ffffff',
+} as const;
+
 export const promptAccentBorderChars = {
   topLeft: '▌',
   topRight: ' ',

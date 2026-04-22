@@ -4,10 +4,11 @@ import {
   TextareaRenderable, fg, h, white, bgWhite, black,
   stringToStyledText,
   type KeyEvent,
-  BoxRenderable,
   MarkdownRenderable,
-  SyntaxStyle
+  SyntaxStyle,
+  CliRenderEvents,
 } from "@opentui/core"
+import { spawnSync } from 'node:child_process';
 import {
   findProviderByNormalizedId,
   getProviderLabel,
@@ -106,6 +107,7 @@ import {
   type ApprovalActionKey,
   presetProviderMeta,
   promptAccentBorderChars,
+  selectionHighlight,
 } from './input-utils';
 import { PaletteManager, type IPaletteHost } from './ui/palette';
 import { McpManager, type IMcpHost, createMcpState, type McpState } from './ui/mcp';
@@ -193,8 +195,13 @@ export class TUIApp {
   private modelModalModelsTextNode!: MutableTextNode;
   private sessionsModalNode!: MutableBoxNode;
   private sessionsModalTextNode!: MutableTextNode;
-  private root!: BoxRenderable;
+  private toastNode!: MutableBoxNode;
+  private toastTextNode!: MutableTextNode;
+  private root!: MutableBoxNode;
   private renderer!: Awaited<ReturnType<typeof createCliRenderer>>;
+  private toastMessage = '';
+  private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  private selectionCopyTimer: ReturnType<typeof setTimeout> | null = null;
 
   private constructor() {}
 
@@ -521,15 +528,34 @@ export class TUIApp {
       id: 'sessions-modal', position: 'absolute', width: '78%', left: '11%', top: '12%', height: 'auto',
       flexDirection: 'column', visible: false, backgroundColor: '#141414', padding: 1, border: true, borderColor: '#6d8f5b',
     });
-    const sessionsModalText = Text({ id: 'sessions-modal-text', content: stringToStyledText(''), fg: '#d8d8d8' });
+    const sessionsModalText = Text({ id: 'sessions-modal-text', content: stringToStyledText(''), fg: '#d8d8d8', selectionBg: selectionHighlight.bg, selectionFg: selectionHighlight.fg });
     sessionsModal.add(sessionsModalText);
+
+    const toast = Box({
+      id: 'toast',
+      position: 'absolute',
+      width: 18,
+      height: 'auto',
+      flexDirection: 'column',
+      visible: false,
+      backgroundColor: '#102028',
+      paddingLeft: 2,
+      paddingRight: 2,
+      paddingTop: 1,
+      paddingBottom: 1,
+      border: true,
+      borderColor: '#00d4ff',
+      zIndex: 50,
+    });
+    const toastText = Text({ id: 'toast-text', content: stringToStyledText(''), fg: '#f4fbff' });
+    toast.add(toastText);
 
     const inputRow = Box({ id: 'input-row', width: '100%', height: 'auto', flexShrink: 0, flexDirection: 'row', backgroundColor: '#1f1f1f', paddingLeft: 0, paddingRight: 1 });
     inputRow.add(Box({ width: 2, height: '100%', flexDirection: 'column', backgroundColor: '#1f1f1f', border: false }).add(Text({ content: '>', fg: '#00d4ff' })));
     const input = h(TextareaRenderable, {
       id: 'main-input', flexGrow: 1, height: 'auto', minHeight: 1, maxHeight: 20,
       placeholder: 'Type / for commands...', textColor: '#ffffff', backgroundColor: '#1f1f1f',
-      cursorColor: '#00d4ff', wrapMode: 'word',
+      cursorColor: '#00d4ff', wrapMode: 'word', selectionBg: selectionHighlight.bg, selectionFg: selectionHighlight.fg,
       keyBindings: [{ name: 'return', action: 'submit' }, { name: 'return', shift: true, action: 'newline' }],
     });
     inputRow.add(input);
@@ -548,6 +574,7 @@ export class TUIApp {
     root.add(providerModal);
     root.add(modelModal);
     root.add(sessionsModal);
+    root.add(toast);
     renderer.root.add(root);
   }
 
@@ -582,7 +609,9 @@ export class TUIApp {
     this.modelModalModelsTextNode = find('model-modal-models-text') as unknown as MutableTextNode;
     this.sessionsModalNode = find('sessions-modal') as unknown as MutableBoxNode;
     this.sessionsModalTextNode = find('sessions-modal-text') as unknown as MutableTextNode;
-    this.root = this.renderer.root as unknown as BoxRenderable;
+    this.toastNode = find('toast') as unknown as MutableBoxNode;
+    this.toastTextNode = find('toast-text') as unknown as MutableTextNode;
+    this.root = this.renderer.root as unknown as MutableBoxNode;
 
     // Validate
     if (!this.inputRowNode || !this.cmdListBoxNode || !this.cmdListTextNode || !this.statusBarTextNode || !this.statusBarStatsNode ||
@@ -590,7 +619,7 @@ export class TUIApp {
         !this.mcpModalNode || !this.mcpModalTextNode || !this.mcpDetailsModalNode || !this.mcpDetailsHeaderBox || !this.mcpDetailsHeaderText || !this.mcpDetailsScrollBox || !this.mcpDetailsModalTextNode || !this.mcpDetailsFooterBox || !this.mcpDetailsModalFooterTextNode ||
         !this.providerModalNode || !this.providerModalTextNode || !this.modelModalNode || !this.modelModalTitleTextNode ||
         !this.modelModalProvidersTextNode || !this.modelModalFilterTextNode || !this.modelModalModelsTextNode ||
-        !this.sessionsModalNode || !this.sessionsModalTextNode) {
+        !this.sessionsModalNode || !this.sessionsModalTextNode || !this.toastNode || !this.toastTextNode) {
       throw new Error('Failed to initialize TUI render tree');
     }
 
@@ -651,10 +680,23 @@ export class TUIApp {
         this.mcpUI.renderMcpDetailsModal();
       }
     };
+    this.root.onMouseUp = () => {
+      this.queueSelectionCopy();
+    };
+    this.root.onMouseDragEnd = () => {
+      this.queueSelectionCopy();
+    };
   }
 
   private wireEventHandlers(): void {
     const renderer = this.renderer;
+
+    renderer.on(CliRenderEvents.RESIZE, () => {
+      if (this.toastNode.visible) {
+        this.positionToast();
+        this.root.requestRender();
+      }
+    });
 
     renderer.prependInputHandler((sequence: string) => {
       // Model modal (higher z-order, checked first)
@@ -1467,6 +1509,90 @@ export class TUIApp {
     this.inputRowNode.visible = !sudoPromptActive;
     this.cmdListBoxNode.visible = !sudoPromptActive && this.palette.open;
     this.root.requestRender();
+  }
+
+  private queueSelectionCopy(): void {
+    if (this.selectionCopyTimer) {
+      clearTimeout(this.selectionCopyTimer);
+    }
+    this.selectionCopyTimer = setTimeout(() => {
+      this.selectionCopyTimer = null;
+      this.copyCurrentSelection();
+    }, 0);
+  }
+
+  private copyCurrentSelection(): void {
+    const selection = this.renderer.getSelection();
+    if (!selection) {
+      return;
+    }
+
+    const text = selection.getSelectedText();
+    if (!text) {
+      return;
+    }
+
+    const copied = this.writeClipboardOsc52(text);
+    this.renderer.clearSelection();
+    this.showToast(copied ? 'Copied to clipboard' : 'Clipboard unavailable');
+  }
+
+  private writeClipboardOsc52(text: string): boolean {
+    if (process.platform === 'darwin') {
+      const pbcopyResult = spawnSync('pbcopy', [], { input: text, encoding: 'utf8' });
+      if (pbcopyResult.status === 0) {
+        return true;
+      }
+    }
+
+    if (process.env.TMUX) {
+      const tmuxResult = spawnSync('tmux', ['load-buffer', '-w', '-'], { input: text, encoding: 'utf8' });
+      if (tmuxResult.status === 0) {
+        return true;
+      }
+    }
+
+    if (!process.stdout.isTTY) {
+      return false;
+    }
+
+    const payload = Buffer.from(text, 'utf8').toString('base64');
+    if (process.env.TERM_PROGRAM === 'iTerm.app') {
+      process.stdout.write(`\u001b]1337;Copy=:${payload}\u0007`);
+      return true;
+    }
+
+    const osc52 = `\u001b]52;c;${payload}\u0007`;
+    const sequence = process.env.TMUX
+      ? `\u001bPtmux;${osc52.replace(/\u001b/g, '\u001b\u001b')}\u001b\\`
+      : osc52;
+
+    process.stdout.write(sequence);
+    return true;
+  }
+
+  private showToast(message: string): void {
+    this.toastMessage = message;
+    this.toastTextNode.content = stringToStyledText(message);
+    this.positionToast();
+    this.toastNode.visible = true;
+    this.root.requestRender();
+
+    if (this.toastTimer) {
+      clearTimeout(this.toastTimer);
+    }
+    this.toastTimer = setTimeout(() => {
+      this.toastTimer = null;
+      this.toastNode.visible = false;
+      this.root.requestRender();
+    }, 1000);
+  }
+
+  private positionToast(): void {
+    const toastWidth = Math.max(18, Math.min(this.renderer.width - 4, this.toastMessage.length + 6));
+    this.toastNode.width = toastWidth;
+    this.toastNode.x = Math.max(0, Math.floor((this.renderer.width - toastWidth) / 2));
+    this.toastNode.y = Math.max(1, Math.floor((this.renderer.height - 3) / 2));
   }
 
   // ── Proxy accessors ────────────────────────────────────────────────────

@@ -1,5 +1,3 @@
-import type { BoxRenderable } from "@opentui/core";
-
 export interface MutableTextNode {
   content: ReturnType<typeof import("@opentui/core").stringToStyledText>;
 }
@@ -14,6 +12,8 @@ export interface MutableBoxNode {
   remove(id: string): void;
   requestRender(): void;
   onMouseDown?: ((event: { x: number; y: number }) => void) | undefined;
+  onMouseUp?: ((event: { x: number; y: number }) => void) | undefined;
+  onMouseDragEnd?: ((event: { x: number; y: number }) => void) | undefined;
   onMouseScroll?: ((event: { scroll?: { direction?: string; delta?: number } }) => void) | undefined;
   // ScrollBox methods (available when the node is a ScrollBox)
   scrollTo?(position: number | { x: number; y: number }): void;

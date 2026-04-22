@@ -18,7 +18,7 @@ import {
   renameSession as renameSessionUtil,
   type SessionStorage,
 } from "../session";
-import { createEmptySession as createEmptySessionUtil } from "../input-utils";
+import { createEmptySession as createEmptySessionUtil, selectionHighlight } from "../input-utils";
 import { promptAccentBorderChars, calculateTokenSpeed } from "../input-utils";
 import type { MutableBoxNode } from "./tui-types";
 
@@ -123,7 +123,7 @@ export class ChatManager {
         paddingX: 1,
       });
     } else {
-      node = Text({ id: nodeId, content: text, fg: color, marginX: 1 });
+      node = Text({ id: nodeId, content: text, fg: color, marginX: 1, selectionBg: selectionHighlight.bg, selectionFg: selectionHighlight.fg });
     }
     this.host.chatNodeIds.push(nodeId);
     this.host.chatNode.add(node);
@@ -149,7 +149,7 @@ export class ChatManager {
       fg('#00d4ff')('> '),
       fg('#ffffff')(text),
     ]);
-    boxNode.add(Text({ content: styledContent }));
+    boxNode.add(Text({ content: styledContent, selectionBg: selectionHighlight.bg, selectionFg: selectionHighlight.fg }));
     this.host.chatNodeIds.push(nodeId);
     this.host.chatNode.add(boxNode);
     this.host.root.requestRender();
