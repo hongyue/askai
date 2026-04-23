@@ -391,7 +391,6 @@ export class TUIApp {
     return {
       state: this.modalsState,
       config: this.config,
-      resolvedProvider: this.resolvedProvider,
       runtime: {
         switchProvider: (id, p) => this.runtime.switchProvider(id, p),
         switchModel: (m, p) => this.runtime.switchModel(m, p),
@@ -1150,7 +1149,9 @@ export class TUIApp {
     this.modelModalModelsTextNode.content = stringToStyledText('');
     this.root.requestRender();
     // If provider modal is still open, keep focus there instead of main input
-    if (!this.modalsState.providerModalOpen) {
+    if (this.modalsState.providerModalOpen) {
+      this.renderProviderModal();
+    } else {
       this.inputNode.focus();
     }
   }
@@ -1263,6 +1264,8 @@ export class TUIApp {
       sessionsFilter: this.modalsState.sessionsFilter,
       sessionsFilterFocus: this.modalsState.sessionsFilterFocus,
       deleteModelConfirm: this.modalsState.deleteModelConfirm,
+      activeProviderId: this.resolvedProvider.id,
+      activeModel: this.resolvedProvider.model,
       currentSession: {
         id: this.chatState.currentSession.id,
         title: this.chatState.currentSession.title,

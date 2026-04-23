@@ -85,6 +85,8 @@ export interface ModalRenderContext {
   deleteModelConfirm: { model: string; providerId: string } | null;
   currentSession: { id: string; title: string; provider: string; model: string };
   messages: Array<{ role: string }>;
+  activeProviderId: string;
+  activeModel: string;
 
   // Helpers
   formatRelativeTime(timestamp: number): string;
@@ -281,7 +283,7 @@ export function renderProviderModal(ctx: ModalRenderContext): void {
   const providerLines = visibleProviders.map((item, visibleIndex) => {
     const index = scrollOffset + visibleIndex;
     const marker = index === ctx.providerModalProviderIndex ? '>' : ' ';
-    const active = item.id === (ctx.getSelectedProviderSlot()?.id) ? ' *' : '';
+    const active = item.id === ctx.activeProviderId ? ' *' : '';
     const prefix = index === ctx.providerModalProviderIndex ? `[${marker}]` : ` ${marker} `;
     return `${prefix} ${item.displayName}${active}`;
   });
@@ -344,7 +346,7 @@ export function renderModelModal(ctx: ModalRenderContext): void {
   const providerLines = visibleProviders.map((item, visibleIndex) => {
     const index = providerScrollOffset + visibleIndex;
     const marker = index === ctx.modelModalProviderIndex ? '>' : ' ';
-    const active = item.id === (ctx.getSelectedProviderSlot()?.id) ? ' *' : '';
+    const active = item.id === ctx.activeProviderId ? ' *' : '';
     const prefix = ctx.modelModalFocus === 'providers' && index === ctx.modelModalProviderIndex ? `[${marker}]` : ` ${marker} `;
     return `${prefix} ${item.displayName}${active}`;
   });
@@ -353,7 +355,7 @@ export function renderModelModal(ctx: ModalRenderContext): void {
   const modelLines = visibleModels.map((model, visibleIndex) => {
     const index = modelScrollOffset + visibleIndex;
     const marker = index === ctx.modelModalModelIndex ? '>' : ' ';
-    const active = selectedProvider && selectedProvider.id === (ctx.getSelectedProviderSlot()?.id) && model === (selectedProvider.model) ? ' *' : '';
+    const active = selectedProvider && selectedProvider.id === ctx.activeProviderId && model === ctx.activeModel ? ' *' : '';
     const prefix = ctx.modelModalFocus === 'models' && index === ctx.modelModalModelIndex ? `[${marker}]` : ` ${marker} `;
     return `${prefix} ${model}${active}`;
   });

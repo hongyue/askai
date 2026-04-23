@@ -212,7 +212,6 @@ export function formatRelativeTime(timestamp: number): string {
 export interface IModalsHost {
   state: ModalsState;
   config: Config;
-  resolvedProvider: ResolvedProviderConfig;
   runtime: {
     switchProvider(providerId: string, persist?: boolean): Promise<any>;
     switchModel(model: string, persist?: boolean): Promise<any>;
@@ -331,6 +330,12 @@ export class ModalsStateManager {
     return filterModels(this.getProviderSlotModels(providerSlot), this.host.state.modelModalFilter.value);
   }
 
+  private syncSelectionsToResolvedProvider(): void {
+    const resolvedProvider = this.host.runtime.getResolvedProvider();
+    this.syncProviderModalSelections(resolvedProvider.id);
+    this.syncModelModalSelection(resolvedProvider.id, resolvedProvider.model);
+  }
+
   // ── Selection sync ─────────────────────────────────────────────────────
 
   syncProviderModalSelections(targetProviderId?: string): void {
@@ -340,7 +345,8 @@ export class ModalsStateManager {
       return;
     }
 
-    const fallbackProviderId = providers[Math.max(0, Math.min(this.host.state.providerModalProviderIndex, providers.length - 1))]?.id || this.host.resolvedProvider.id;
+    const resolvedProvider = this.host.runtime.getResolvedProvider();
+    const fallbackProviderId = providers[Math.max(0, Math.min(this.host.state.providerModalProviderIndex, providers.length - 1))]?.id || resolvedProvider.id;
     const nextProviderId = targetProviderId || fallbackProviderId;
     const nextProviderIndex = providers.findIndex(item => item.id === nextProviderId);
     this.host.state.providerModalProviderIndex = nextProviderIndex >= 0 ? nextProviderIndex : 0;
@@ -362,14 +368,15 @@ export class ModalsStateManager {
       return;
     }
 
-    const nextProviderId = targetProviderId || this.host.resolvedProvider.id;
+    const resolvedProvider = this.host.runtime.getResolvedProvider();
+    const nextProviderId = targetProviderId || resolvedProvider.id;
     const nextProviderIndex = providers.findIndex(provider => provider.id === nextProviderId);
     this.host.state.modelModalProviderIndex = Math.max(0, nextProviderIndex >= 0 ? nextProviderIndex : 0);
     this.host.state.modelModalFilter = { value: '', cursorOffset: 0 };
 
     const selectedProvider = providers[this.host.state.modelModalProviderIndex];
     const models = this.getModelModalModels(selectedProvider);
-    const nextModel = targetModel || this.host.resolvedProvider.model;
+    const nextModel = targetModel || selectedProvider?.model || resolvedProvider.model;
     const nextModelIndex = models.findIndex(model => model === nextModel);
     this.host.state.modelModalModelIndex = Math.max(0, nextModelIndex >= 0 ? nextModelIndex : 0);
 
@@ -480,6 +487,7 @@ export class ModalsStateManager {
 
     try {
       const originalId = formState.providerId;
+      const wasActiveProvider = this.host.runtime.getResolvedProvider().id === originalId;
       const newId = formState.values.id?.trim() || originalId;
       const previousProviderConfig = this.host.config.providers[originalId];
       const nextConfig = this.getProviderFormConfig(originalId, formState.values, previousProviderConfig);
@@ -506,10 +514,6 @@ export class ModalsStateManager {
       upsertProvider(this.host.config, newId, nextConfig);
 
       this.host.state.providerModalNotice = null;
-      if (this.host.resolvedProvider.id === newId) {
-        await this.host.runtime.switchProvider(newId, false);
-      }
-
       // Fetch models for all providers (preset and custom)
       try {
         const fetchedModels = await fetchAvailableModels(resolveProviderConfig(this.host.config, newId));
@@ -528,10 +532,20 @@ export class ModalsStateManager {
         this.host.state.providerModalNotice = `Saved provider. Failed to refresh models: ${error instanceof Error ? error.message : 'Unknown error'}`;
       }
 
+      if (wasActiveProvider) {
+        await this.host.runtime.switchProvider(newId, false);
+      }
+
       await this.host.runtime.persistConfig();
       this.host.state.providerFormState = null;
-      this.syncProviderModalSelections(newId);
       await this.host.refreshActiveProviderView();
+      if (wasActiveProvider) {
+        this.syncSelectionsToResolvedProvider();
+      } else {
+        const providerModel = this.host.config.providers[newId]?.model;
+        this.syncProviderModalSelections(newId);
+        this.syncModelModalSelection(newId, providerModel);
+      }
       this.host.renderProviderModal();
     } catch (error) {
       formState.error = error instanceof Error ? error.message : 'Unknown error';
@@ -817,7 +831,7 @@ export class ModalsStateManager {
 
     try {
       removeProviderModel(this.host.config, selectedProvider.id, selectedModel);
-      if (this.host.resolvedProvider.id === selectedProvider.id) {
+      if (this.host.runtime.getResolvedProvider().id === selectedProvider.id) {
         await this.host.runtime.switchProvider(selectedProvider.id, false);
       }
       await this.host.runtime.persistConfig();
@@ -839,7 +853,7 @@ export class ModalsStateManager {
     const selectedModel = models[this.host.state.modelModalModelIndex];
     if (!selectedModel) return;
 
-    if (this.host.resolvedProvider.id !== selectedProvider.id) {
+    if (this.host.runtime.getResolvedProvider().id !== selectedProvider.id) {
       await this.host.runtime.switchProvider(selectedProvider.id, false);
     }
     if (this.host.config.providers[selectedProvider.id]?.model !== selectedModel) {
@@ -849,8 +863,8 @@ export class ModalsStateManager {
       }
     }
     await this.host.runtime.persistConfig();
-    this.syncModelModalSelection(selectedProvider.id, selectedModel);
     await this.host.refreshActiveProviderView();
+    this.syncSelectionsToResolvedProvider();
     this.host.closeModelModal();
   }
 
@@ -905,18 +919,19 @@ export class ModalsStateManager {
     this.host.state.providerFormState = null;
     this.host.state.providerModalNotice = null;
     this.host.state.modelModalOpen = false;
-    this.syncProviderModalSelections(this.host.resolvedProvider.id);
+    this.syncProviderModalSelections(this.host.runtime.getResolvedProvider().id);
     this.host.renderProviderModal();
   }
 
   openModelModal(providerId?: string): void {
+    const resolvedProvider = this.host.runtime.getResolvedProvider();
     this.host.state.modelModalOpen = true;
     this.host.state.modelModalFocus = 'models';
     this.host.state.modelModalNotice = null;
     this.host.state.modelModalFilter = { value: '', cursorOffset: 0 };
     this.syncModelModalSelection(
-      providerId || this.host.resolvedProvider.id,
-      providerId === this.host.resolvedProvider.id ? this.host.resolvedProvider.model : undefined,
+      providerId || resolvedProvider.id,
+      providerId === resolvedProvider.id ? resolvedProvider.model : undefined,
     );
     this.host.renderModelModal();
   }
