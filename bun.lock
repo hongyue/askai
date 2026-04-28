@@ -6,8 +6,8 @@
       "name": "askai",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.20.9",
-        "@modelcontextprotocol/sdk": "^1.28.0",
-        "@opentui/core": "^0.1.92",
+        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@opentui/core": "^0.1.93",
         "commander": "^12.1.0",
         "inquirer": "^9.3.8",
         "openai": "^4.104.0",
