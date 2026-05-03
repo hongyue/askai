@@ -32,6 +32,7 @@ export interface Config {
   };
   system_prompt?: string;
   allowExecute?: boolean;
+  showThinking?: boolean;  // Display chain-of-thought content (default: true)
   mcpServers?: {
     [key: string]: MCPServerConfig;
   };
@@ -367,6 +368,7 @@ function validateConfig(config: unknown): Config {
     providers,
     system_prompt: (cfg.system_prompt as string) || DEFAULT_SYSTEM_PROMPT,
     allowExecute: typeof cfg.allowExecute === 'boolean' ? cfg.allowExecute : undefined,
+    showThinking: typeof cfg.showThinking === 'boolean' ? cfg.showThinking : true,  // Default to true
     mcpServers: cfg.mcpServers as Config['mcpServers'],
   };
 

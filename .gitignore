@@ -21,6 +21,7 @@ askai
 .qwen/
 .opencode/
 .continue/
+.hermes/
 
 # OS
 .DS_Store

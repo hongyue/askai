@@ -216,7 +216,14 @@ export class SessionsManager {
           for (const msg of this.host.chatState.messages) {
             if (msg.role === 'system') continue;
             if (msg.role === 'user') this.host.chatManager.addUserMsg(msg.content as string);
-            else if (msg.role === 'assistant' && msg.content) this.host.chatManager.addMsg(msg.content as string, '#ffffff', true);
+            else if (msg.role === 'assistant') {
+              // Display thinking content first if available
+              if (msg.thinking && this.host.chatManager.showThinking) {
+                this.host.chatManager.addThinkingMsg(msg.thinking, false);  // isStreaming = false (collapsible)
+              }
+              // Then display final response
+              if (msg.content) this.host.chatManager.addMsg(msg.content as string, '#ffffff', true);
+            }
             else if (msg.role === 'tool') this.host.chatManager.addMsg(`[tool] ${msg.content}`, '#888888');
           }
           this.host.closeSessionsModal();

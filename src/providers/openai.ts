@@ -81,6 +81,8 @@ export class OpenAIProvider implements Provider {
         
         // Handle content
         const content = delta?.content || '';
+        // Extract reasoning_content if present (llama.cpp with --reasoning-format deepseek)
+        const reasoning = (delta as any)?.reasoning_content || '';
         
         // Handle tool calls
         if (delta?.tool_calls) {
@@ -108,9 +110,10 @@ export class OpenAIProvider implements Provider {
         }
         
         const done = Boolean(usage) || (streamFinished && chunk.choices.length === 0);
-        if (content || done) {
+        if (content || reasoning || done) {
           yield {
             content,
+            thinking: reasoning || undefined,
             done,
             tool_calls: toolCalls.length > 0 && done ? toolCalls : undefined,
             usage,
@@ -175,6 +178,7 @@ export class OpenAIProvider implements Provider {
       const result: Message = {
         role: 'assistant',
         content: choice?.message?.content || '',
+        thinking: (choice?.message as any)?.reasoning_content || undefined,
         usage: mapOpenAIUsage(response.usage),
       };
 

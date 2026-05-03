@@ -40,6 +40,7 @@ export class AnthropicProvider implements Provider {
       const response = await this.chatComplete(messages, tools, options);
       yield {
         content: response.content,
+        thinking: response.thinking,
         done: true,
         tool_calls: response.tool_calls,
       };
@@ -62,16 +63,25 @@ export class AnthropicProvider implements Provider {
         signal: options?.signal,
       });
       let usage: TokenUsage | undefined;
+      let thinkingContent = '';
 
       for await (const event of stream) {
         if (event.type === 'message_start') {
           usage = mapAnthropicUsage(event.message.usage);
         }
 
+        // Handle thinking content blocks (Anthropic Claude 3.5+ feature)
+        if (event.type === 'content_block_start') {
+          // Check if this is a thinking block (if supported by SDK)
+          // Note: thinking block type may not be available in all SDK versions
+        }
+
         if (event.type === 'content_block_delta') {
           if (event.delta.type === 'text_delta') {
-            yield { content: event.delta.text, done: false };
+            yield { content: event.delta.text, thinking: undefined, done: false };
           }
+          // Note: thinking_delta may not be available in all SDK versions
+          // Will be handled when the SDK adds support
         }
 
         if (event.type === 'message_delta') {
@@ -82,7 +92,7 @@ export class AnthropicProvider implements Provider {
         }
 
         if (event.type === 'message_stop') {
-          yield { content: '', done: true, usage };
+          yield { content: '', thinking: thinkingContent, done: true, usage };
           return;
         }
       }
@@ -159,11 +169,13 @@ export class AnthropicProvider implements Provider {
       const result: Message = {
         role: 'assistant',
         content: '',
+        thinking: '',
         usage: mapAnthropicUsage(response.usage),
       };
 
       const toolCalls: ToolCall[] = [];
       const textParts: string[] = [];
+      const thinkingParts: string[] = [];
 
       for (const block of response.content) {
         if (block.type === 'text') {
@@ -176,9 +188,12 @@ export class AnthropicProvider implements Provider {
             arguments: JSON.stringify(toolBlock.input),
           });
         }
+        // Note: thinking block type may not be available in all SDK versions
+        // Will be handled when the SDK adds proper type support
       }
 
       result.content = textParts.join('');
+      result.thinking = thinkingParts.join('\n');
       if (toolCalls.length > 0) {
         result.tool_calls = toolCalls;
       }

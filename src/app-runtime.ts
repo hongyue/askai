@@ -14,15 +14,31 @@ export async function getAssistantResponse(
   messages: Message[],
   providerTools: any[],
   options?: ChatOptions,
+  onChunk?: (thinking: string | null, content: string | null) => void,
 ): Promise<Message> {
   if (providerTools.length > 0) {
     return await provider.chatComplete(messages, providerTools, options);
   }
 
   let fullResponse = '';
+  let thinkingContent = '';
   let usage: TokenUsage | undefined;
+  let lastThinkingDisplayed = '';
+  let lastContentDisplayed = '';
+  
   for await (const chunk of provider.chat(messages, providerTools, options)) {
-    if (chunk.content) fullResponse += chunk.content;
+    if (chunk.content) {
+      fullResponse += chunk.content;
+      if (onChunk) {
+        onChunk(null, chunk.content);
+      }
+    }
+    if (chunk.thinking) {
+      thinkingContent += chunk.thinking;
+      if (onChunk) {
+        onChunk(chunk.thinking, null);
+      }
+    }
     if (chunk.usage) {
       usage = chunk.usage;
     }
@@ -30,6 +46,7 @@ export async function getAssistantResponse(
       return {
         role: 'assistant',
         content: fullResponse,
+        thinking: thinkingContent || undefined,
         tool_calls: chunk.tool_calls,
         usage,
       };
@@ -39,6 +56,7 @@ export async function getAssistantResponse(
   return {
     role: 'assistant',
     content: fullResponse,
+    thinking: thinkingContent || undefined,
     usage,
   };
 }

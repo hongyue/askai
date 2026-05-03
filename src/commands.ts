@@ -23,6 +23,7 @@ export function createCommands(
   onModelCommand?: (args: string[]) => Promise<string | void>,
   onNewSession?: () => Promise<string | void>,
   onOpenSessionsModal?: () => void,
+  onToggleThinking?: () => string,
 ): Command[] {
   return [
     {
@@ -73,6 +74,13 @@ export function createCommands(
       description: 'clear the screen',
       action: () => {
         onClear?.();
+      },
+    },
+    {
+      name: 'toggle-thinking',
+      description: 'toggle chain-of-thought display',
+      action: () => {
+        return onToggleThinking?.() || 'Toggled thinking display';
       },
     },
     {

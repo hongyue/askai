@@ -39,6 +39,7 @@ function migrate(database: Database): void {
       session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
       role TEXT NOT NULL,
       content TEXT NOT NULL,
+      thinking TEXT,
       tool_calls TEXT,
       tool_call_id TEXT,
       seq INTEGER NOT NULL,
@@ -50,6 +51,11 @@ function migrate(database: Database): void {
   ensureSessionColumn(database, 'completion_tokens', 'INTEGER NOT NULL DEFAULT 0');
   ensureSessionColumn(database, 'total_tokens', 'INTEGER NOT NULL DEFAULT 0');
   ensureSessionColumn(database, 'last_token_speed', 'REAL');
+  // Add thinking column to messages table if not exists
+  const msgColumns = database.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>;
+  if (!msgColumns.some(column => column.name === 'thinking')) {
+    database.exec(`ALTER TABLE messages ADD COLUMN thinking TEXT`);
+  }
 }
 
 function ensureSessionColumn(database: Database, name: string, definition: string): void {
@@ -126,6 +132,7 @@ export function addMessage(
   content: string,
   toolCalls?: ToolCall[],
   toolCallId?: string,
+  thinking?: string,
 ): void {
   const database = getDatabase();
   const now = Date.now();
@@ -133,11 +140,12 @@ export function addMessage(
     'SELECT COALESCE(MAX(seq), -1) + 1 as next_seq FROM messages WHERE session_id = ?'
   ).get(sessionId) as { next_seq: number };
   database.prepare(
-    'INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, seq, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO messages (session_id, role, content, thinking, tool_calls, tool_call_id, seq, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     sessionId,
     role,
     content,
+    thinking || null,
     toolCalls ? JSON.stringify(toolCalls) : null,
     toolCallId || null,
     seqResult.next_seq,
@@ -149,13 +157,16 @@ export function addMessage(
 export function getMessages(sessionId: string): Message[] {
   const database = getDatabase();
   const rows = database.prepare(
-    'SELECT role, content, tool_calls, tool_call_id FROM messages WHERE session_id = ? ORDER BY seq ASC'
-  ).all(sessionId) as Array<{ role: string; content: string; tool_calls: string | null; tool_call_id: string | null }>;
+    'SELECT role, content, thinking, tool_calls, tool_call_id FROM messages WHERE session_id = ? ORDER BY seq ASC'
+  ).all(sessionId) as Array<{ role: string; content: string; thinking: string | null; tool_calls: string | null; tool_call_id: string | null }>;
   return rows.map(row => {
     const msg: Message = {
       role: row.role as Message['role'],
       content: row.content,
     };
+    if (row.thinking) {
+      msg.thinking = row.thinking;
+    }
     if (row.tool_calls) {
       msg.tool_calls = JSON.parse(row.tool_calls) as ToolCall[];
     }

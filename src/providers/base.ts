@@ -10,6 +10,7 @@ export interface TokenUsage {
 export interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  thinking?: string;  // Chain-of-thought / reasoning content (separate from main content)
   tool_call_id?: string;
   tool_calls?: ToolCall[];
   usage?: TokenUsage;
@@ -18,6 +19,7 @@ export interface Message {
 
 export interface StreamChunk {
   content: string;
+  thinking?: string;  // Chain-of-thought / reasoning content (streamed separately)
   done: boolean;
   tool_calls?: ToolCall[];
   usage?: TokenUsage;
