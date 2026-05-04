@@ -253,15 +253,6 @@ export class TUIApp {
         return 'Started new session';
       },
       () => { this.openSessionsModal(); },
-      () => {
-        // Toggle thinking display
-        this.config.showThinking = !(this.config.showThinking ?? true);
-        const status = this.config.showThinking ? 'enabled' : 'disabled';
-        void this.runtime.persistConfig();
-        // Re-render messages to hide/show thinking boxes based on new setting
-        this.chatManager.toggleThinkingDisplay();
-        return `Chain-of-thought display: ${status}`;
-      },
     );
     this.commands = commands;
     this.palette.matches = [...commands];
