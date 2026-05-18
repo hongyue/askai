@@ -100,6 +100,7 @@ function isAbortError(error: unknown): boolean {
 export class ChatManager {
   private markdownSyntaxStyle = SyntaxStyle.create();
   private lastThinkingNodeId: string | null = null;  // Track the thinking node ID separately
+  private lastContentNodeId: string | null = null;  // Track the content node ID separately
   private isUpdatingThinking: boolean = false;  // Prevent duplicate updates
   private lastClickTime: Map<string, number> = new Map();  // Debounce clicks
 
@@ -385,8 +386,40 @@ export class ChatManager {
     }
   }
 
+  // Update the content message in place (no flicker — preserves position, no markdown re-parse)
+  updateLastContentMsg(text: string, isMarkdown: boolean = false): void {
+    if (!this.lastContentNodeId) return;
+
+    const idx = this.host.chatNodeIds.indexOf(this.lastContentNodeId);
+    if (idx < 0) return;
+
+    // Remove the old content node
+    this.host.chatNode.remove(this.lastContentNodeId);
+    this.host.chatNodeIds.splice(idx, 1);
+
+    // Re-create with the same node ID at the same position
+    const nodeId = this.lastContentNodeId;
+    let node;
+    if (isMarkdown) {
+      node = h(MarkdownRenderable, {
+        id: nodeId,
+        content: text,
+        syntaxStyle: this.markdownSyntaxStyle,
+        fg: '#ffffff',
+        conceal: true,
+        paddingX: 1,
+      });
+    } else {
+      node = Text({ id: nodeId, content: text, fg: '#ffffff', marginX: 1, selectionBg: selectionHighlight.bg, selectionFg: selectionHighlight.fg });
+    }
+    this.host.chatNodeIds.splice(idx, 0, nodeId);
+    this.host.chatNode.add(node, idx);
+    this.host.root.requestRender();
+  }
+
   clearAllMessages(): void {
     this.lastThinkingNodeId = null;  // Reset thinking node tracking
+    this.lastContentNodeId = null;  // Reset content node tracking
     while (this.host.chatNodeIds.length > 0) {
       const nodeId = this.host.chatNodeIds.pop();
       if (nodeId) {
@@ -400,6 +433,7 @@ export class ChatManager {
   toggleThinkingDisplay(): void {
     // Clear all messages
     this.lastThinkingNodeId = null;
+    this.lastContentNodeId = null;
     const messagesToReAdd: Array<{role: string; content: string | null; thinking?: string}> = [];
     
     // Collect all messages (skip system)
@@ -527,14 +561,8 @@ export class ChatManager {
         let accumulatedThinking = '';
         let accumulatedContent = '';
         let lastMessageType: 'thinking' | 'content' | null = null;
-        
-        // Throttle final response updates to reduce flickering
-        // Match thinking's smoothness by updating less frequently
-        let contentChunkCount = 0;
-        const CONTENT_UPDATE_INTERVAL = 15;  // Update every N chunks (increased from 8)
-        let lastContentUpdateTime = 0;
-        const CONTENT_UPDATE_TIME_MS = 250;  // Or every 250ms (increased from 150ms)
-        
+        this.lastContentNodeId = null;
+
         const response = await getAssistantResponse(
           this.host.runtime.getProvider(),
           this.host.state.messages,
@@ -542,44 +570,36 @@ export class ChatManager {
           { signal: controller.signal },
           // Callback for streaming display - both thinking and content stream in real-time
           (thinkingDelta, contentDelta) => {
-            const now = Date.now();
-            
             if (thinkingDelta && this.host.showThinking) {
               accumulatedThinking += thinkingDelta;
-              // Update thinking in real-time (use update to avoid duplication)
               if (lastMessageType === 'thinking') {
                 this.updateLastThinkingMsg(accumulatedThinking, true);
               } else {
-                this.addThinkingMsg(accumulatedThinking, true);  // isStreaming = true
+                this.addThinkingMsg(accumulatedThinking, true);
               }
               lastMessageType = 'thinking';
             }
             if (contentDelta) {
               accumulatedContent += contentDelta;
-              contentChunkCount++;
-              
-              // Throttle content updates: every N chunks OR every 250ms
-              const shouldUpdate = contentChunkCount >= CONTENT_UPDATE_INTERVAL || (now - lastContentUpdateTime > CONTENT_UPDATE_TIME_MS);
-              
-              if (shouldUpdate) {
-                if (lastMessageType === 'content') {
-                  this.removeLastMsg();
-                }
-                this.addMsg(accumulatedContent as string, '#ffffff', true);
-                lastMessageType = 'content';
-                contentChunkCount = 0;
-                lastContentUpdateTime = now;
+              // In-place: update as Text (no markdown parsing → no flicker)
+              if (lastMessageType === 'content') {
+                this.updateLastContentMsg(accumulatedContent, false);
+              } else {
+                this.addMsg(accumulatedContent, '#ffffff', false);
+                this.lastContentNodeId = this.host.chatNodeIds[this.host.chatNodeIds.length - 1];
               }
+              lastMessageType = 'content';
             }
           },
         );
         
-        // Final flush: ensure any remaining content is displayed
-        if (accumulatedContent && lastMessageType !== 'content') {
-          this.addMsg(accumulatedContent as string, '#ffffff', true);
-        } else if (accumulatedContent && lastMessageType === 'content') {
-          this.removeLastMsg();
-          this.addMsg(accumulatedContent as string, '#ffffff', true);
+        // Final flush: swap streaming Text node to final MarkdownRenderable
+        if (accumulatedContent) {
+          if (lastMessageType === 'content') {
+            this.updateLastContentMsg(accumulatedContent, true);
+          } else {
+            this.addMsg(accumulatedContent, '#ffffff', true);
+          }
         }
         
         // Finalize thinking: convert from streaming (non-collapsible) to final (collapsible)
@@ -620,7 +640,17 @@ export class ChatManager {
         this.host.onCommandExecution?.(lastMessage.content);
       }
     } catch (error) {
-      this.removeLastMsg();
+      // Remove the tracked content node (if any) instead of blindly removing last
+      if (this.lastContentNodeId) {
+        const idx = this.host.chatNodeIds.indexOf(this.lastContentNodeId);
+        if (idx >= 0) {
+          this.host.chatNode.remove(this.lastContentNodeId);
+          this.host.chatNodeIds.splice(idx, 1);
+        }
+        this.lastContentNodeId = null;
+      } else {
+        this.removeLastMsg();
+      }
       if (this.isAbortError(error) || (error instanceof Error && error.message === 'Turn interrupted')) {
         this.addMsg('Interrupted.', '#ffaa00');
       } else {
