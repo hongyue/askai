@@ -21,6 +21,7 @@ export interface ResolvedProviderConfig extends ProviderConfig {
 export interface MCPServerConfig {
   command?: string;
   args?: string[];
+  env?: Record<string, string>;
   url?: string;
   autoConnect?: boolean;
 }

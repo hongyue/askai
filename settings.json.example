@@ -31,6 +31,9 @@
     "filesystem": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"],
+      "env": {
+        "MY_VAR": "some-value"
+      },
       "autoConnect": false
     },
     "web-search": {

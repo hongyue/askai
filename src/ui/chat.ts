@@ -600,6 +600,11 @@ export class ChatManager {
           } else {
             this.addMsg(accumulatedContent, '#ffffff', true);
           }
+        } else if (response.content) {
+          // Response was not streamed (e.g. chatComplete path when tools are present)
+          // Display it directly as markdown
+          this.addMsg(response.content, '#ffffff', true);
+          this.lastContentNodeId = this.host.chatNodeIds[this.host.chatNodeIds.length - 1];
         }
         
         // Finalize thinking: convert from streaming (non-collapsible) to final (collapsible)
