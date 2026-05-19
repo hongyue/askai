@@ -13,6 +13,7 @@ export interface Message {
   thinking?: string;  // Chain-of-thought / reasoning content (separate from main content)
   tool_call_id?: string;
   tool_calls?: ToolCall[];
+  tool_name?: string;  // Tool name for tool role messages (used for foldable display headers)
   usage?: TokenUsage;
   tokenSpeed?: number;
 }

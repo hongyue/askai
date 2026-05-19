@@ -213,18 +213,18 @@ export class SessionsManager {
           this.host.runtime.loadPersistedSession(selected.id);
           this.host.chatState.currentSession = this.getSession(selected.id)!;
           this.host.chatManager.clearAllMessages();
-          for (const msg of this.host.chatState.messages) {
+          const msgs = this.host.chatState.messages;
+          for (let i = 0; i < msgs.length; i++) {
+            const msg = msgs[i];
             if (msg.role === 'system') continue;
             if (msg.role === 'user') this.host.chatManager.addUserMsg(msg.content as string);
             else if (msg.role === 'assistant') {
-              // Display thinking content first if available
               if (msg.thinking && this.host.chatManager.showThinking) {
-                this.host.chatManager.addThinkingMsg(msg.thinking, false);  // isStreaming = false (collapsible)
+                this.host.chatManager.addThinkingMsg(msg.thinking, false);
               }
-              // Then display final response
               if (msg.content) this.host.chatManager.addMsg(msg.content as string, '#ffffff', true);
             }
-            else if (msg.role === 'tool') this.host.chatManager.addMsg(`[tool] ${msg.content}`, '#888888');
+            else if (msg.role === 'tool') this.host.chatManager.addToolMessage(msg, msgs, i);
           }
           this.host.closeSessionsModal();
           this.host.renderHeader();

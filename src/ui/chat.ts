@@ -37,6 +37,7 @@ export interface ChatState {
   activeTurn: ActiveTurn | null;
   nextTurnId: number;
   expandedThinking: Set<string>;  // Track which thinking messages are expanded (by unique node ID)
+  expandedToolCalls: Set<string>;  // Track which tool call results are expanded (by unique node ID)
 }
 
 export function createChatState(messages: Message[], session: SessionStorage): ChatState {
@@ -47,6 +48,7 @@ export function createChatState(messages: Message[], session: SessionStorage): C
     activeTurn: null,
     nextTurnId: 1,
     expandedThinking: new Set(),  // By default, all thinking is collapsed
+    expandedToolCalls: new Set(),  // By default, all tool calls are collapsed
   };
 }
 
@@ -328,6 +330,79 @@ export class ChatManager {
     this.host.root.requestRender();
   }
 
+  addToolCallMsg(text: string, toolName: string, isError: boolean = false): string {
+    const nodeId = `tool-${this.host.chatNodeIds.length}-${Date.now()}`;
+    const isExpanded = this.host.state.expandedToolCalls.has(nodeId);
+
+    const boxNode = Box({
+      id: nodeId,
+      width: '100%',
+      height: 'auto',
+      flexDirection: 'column',
+      paddingLeft: 2,
+      paddingRight: 1,
+      marginY: 0,
+      border: ['left', 'right'],
+      borderColor: isError ? '#ff4444' : '#555555',
+    });
+
+    boxNode.onMouseDown = (event) => {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+
+      const now = Date.now();
+      const lastClick = this.lastClickTime.get(nodeId) || 0;
+      if (now - lastClick < 200) return;
+      this.lastClickTime.set(nodeId, now);
+
+      if (this.host.state.expandedToolCalls.has(nodeId)) {
+        this.host.state.expandedToolCalls.delete(nodeId);
+      } else {
+        this.host.state.expandedToolCalls.add(nodeId);
+      }
+      this.updateToolCallMsgById(nodeId, text, toolName, isError);
+    };
+
+    boxNode.onMouseUp = (event) => {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+    };
+
+    const indicator = isExpanded ? '▼' : '▶';
+    const headerNode = Text({
+      content: `${indicator} ${toolName}`,
+      fg: isError ? '#ff4444' : '#ffaa00',
+      selectionBg: selectionHighlight.bg,
+      selectionFg: selectionHighlight.fg,
+    });
+    boxNode.add(headerNode);
+
+    if (isExpanded) {
+      const contentNode = Text({
+        content: text || '(no output)',
+        fg: isError ? '#ff8888' : '#aaaaaa',
+        selectionBg: selectionHighlight.bg,
+        selectionFg: selectionHighlight.fg,
+      });
+      boxNode.add(contentNode);
+    }
+
+    this.host.chatNodeIds.push(nodeId);
+    this.host.chatNode.add(boxNode);
+    this.host.root.requestRender();
+    return nodeId;
+  }
+
+  addToolMessage(msg: Message, allMessages: Message[], index: number): void {
+    const toolName = msg.tool_name || this.findToolNameForMessage(allMessages, index);
+    if (toolName) {
+      const isError = msg.content ? msg.content.startsWith('Error: ') : false;
+      this.addToolCallMsg(msg.content, toolName, isError);
+    } else {
+      this.addMsg(`[tool] ${msg.content}`, '#888888');
+    }
+  }
+
   removeLastMsg(): void {
     const nodeId = this.host.chatNodeIds.pop();
     if (nodeId) {
@@ -386,6 +461,73 @@ export class ChatManager {
     }
   }
 
+  private updateToolCallMsgById(nodeId: string, text: string, toolName: string, isError: boolean): void {
+    const idx = this.host.chatNodeIds.indexOf(nodeId);
+    if (idx < 0) return;
+
+    this.host.chatNode.remove(nodeId);
+    this.host.chatNodeIds.splice(idx, 1);
+
+    const isExpanded = this.host.state.expandedToolCalls.has(nodeId);
+
+    const boxNode = Box({
+      id: nodeId,
+      width: '100%',
+      height: 'auto',
+      flexDirection: 'column',
+      paddingLeft: 2,
+      paddingRight: 1,
+      marginY: 0,
+      border: ['left', 'right'],
+      borderColor: isError ? '#ff4444' : '#555555',
+    });
+
+    boxNode.onMouseDown = (event) => {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+
+      const now = Date.now();
+      const lastClick = this.lastClickTime.get(nodeId) || 0;
+      if (now - lastClick < 200) return;
+      this.lastClickTime.set(nodeId, now);
+
+      if (this.host.state.expandedToolCalls.has(nodeId)) {
+        this.host.state.expandedToolCalls.delete(nodeId);
+      } else {
+        this.host.state.expandedToolCalls.add(nodeId);
+      }
+      this.updateToolCallMsgById(nodeId, text, toolName, isError);
+    };
+
+    boxNode.onMouseUp = (event) => {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+    };
+
+    const indicator = isExpanded ? '▼' : '▶';
+    const headerNode = Text({
+      content: `${indicator} ${toolName}`,
+      fg: isError ? '#ff4444' : '#ffaa00',
+      selectionBg: selectionHighlight.bg,
+      selectionFg: selectionHighlight.fg,
+    });
+    boxNode.add(headerNode);
+
+    if (isExpanded) {
+      const contentNode = Text({
+        content: text || '(no output)',
+        fg: isError ? '#ff8888' : '#aaaaaa',
+        selectionBg: selectionHighlight.bg,
+        selectionFg: selectionHighlight.fg,
+      });
+      boxNode.add(contentNode);
+    }
+
+    this.host.chatNodeIds.splice(idx, 0, nodeId);
+    this.host.chatNode.add(boxNode, idx);
+    this.host.root.requestRender();
+  }
+
   // Update the content message in place (no flicker — preserves position, no markdown re-parse)
   updateLastContentMsg(text: string, isMarkdown: boolean = false): void {
     if (!this.lastContentNodeId) return;
@@ -426,6 +568,7 @@ export class ChatManager {
         this.host.chatNode.remove(nodeId);
       }
     }
+    this.host.state.expandedToolCalls.clear();
     this.host.root.requestRender();
   }
 
@@ -434,13 +577,8 @@ export class ChatManager {
     // Clear all messages
     this.lastThinkingNodeId = null;
     this.lastContentNodeId = null;
-    const messagesToReAdd: Array<{role: string; content: string | null; thinking?: string}> = [];
     
-    // Collect all messages (skip system)
-    for (const msg of this.host.state.messages) {
-      if (msg.role === 'system') continue;
-      messagesToReAdd.push(msg);
-    }
+    const allMessages = this.host.state.messages;
     
     // Clear the display
     while (this.host.chatNodeIds.length > 0) {
@@ -451,7 +589,10 @@ export class ChatManager {
     }
     
     // Re-add messages with new showThinking setting
-    for (const msg of messagesToReAdd) {
+    for (let i = 0; i < allMessages.length; i++) {
+      const msg = allMessages[i];
+      if (msg.role === 'system') continue;
+      
       if (msg.role === 'user') {
         this.addUserMsg(msg.content as string);
       } else if (msg.role === 'assistant') {
@@ -464,11 +605,33 @@ export class ChatManager {
           this.addMsg(msg.content as string, '#ffffff', true);
         }
       } else if (msg.role === 'tool') {
-        this.addMsg(`[tool] ${msg.content}`, '#888888');
+        const toolName = msg.tool_name || this.findToolNameForMessage(allMessages, i);
+        if (toolName) {
+          const isError = msg.content ? msg.content.startsWith('Error: ') : false;
+          this.addToolCallMsg(msg.content, toolName, isError);
+        } else {
+          this.addMsg(`[tool] ${msg.content}`, '#888888');
+        }
       }
     }
     
     this.host.root.requestRender();
+  }
+
+  private findToolNameForMessage(messages: Message[], currentIndex: number): string | undefined {
+    const msg = messages[currentIndex];
+    if (!msg.tool_call_id) return undefined;
+    for (let i = currentIndex - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === 'assistant' && m.tool_calls) {
+        for (const tc of m.tool_calls) {
+          if (tc.id === msg.tool_call_id) {
+            return tc.name;
+          }
+        }
+      }
+    }
+    return undefined;
   }
 
   // ── Tool call handling ───────────────────────────────────────────────────
@@ -484,30 +647,27 @@ export class ChatManager {
       }
 
       const args = toolCall.arguments ? JSON.parse(toolCall.arguments) as Record<string, unknown> : {};
-      this.addMsg(`Using tool: ${toolCall.name}`, '#ffaa00');
 
       try {
         const result = await this.host.mcpManager.callTool(toolCall.name, args);
         const content = formatToolContent(result.content);
-        if (content) {
-          for (const line of content.split('\n')) {
-            this.addMsg(line, result.isError ? '#ff4444' : '#888888');
-          }
-        }
         const toolContent = content || (result.isError ? 'Tool returned an error.' : 'Tool completed successfully.');
+        this.addToolCallMsg(toolContent, toolCall.name, result.isError);
         this.host.state.messages.push({
           role: 'tool',
           content: toolContent,
           tool_call_id: toolCall.id,
+          tool_name: toolCall.name,
         });
         addMessage(this.host.state.currentSession.id, 'tool', toolContent, undefined, toolCall.id);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown tool error';
-        this.addMsg(`Tool error (${toolCall.name}): ${message}`, '#ff4444');
+        this.addToolCallMsg(`Error: ${message}`, toolCall.name, true);
         this.host.state.messages.push({
           role: 'tool',
           content: `Error: ${message}`,
           tool_call_id: toolCall.id,
+          tool_name: toolCall.name,
         });
         addMessage(this.host.state.currentSession.id, 'tool', `Error: ${message}`, undefined, toolCall.id);
       }
