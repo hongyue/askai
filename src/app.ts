@@ -1443,10 +1443,9 @@ export class TUIApp {
     if (key.sequence && key.sequence.length > 0) {
       const isPrintable = key.sequence.split('').every(c => { const code = c.charCodeAt(0); return code >= 32 || code > 127; });
       if (isPrintable) {
-        const nextValue = this.inputBuffer + key.sequence;
-        const startsCommandMode = this.inputBuffer === '' && key.sequence === '/';
+        const nextValue = this.inputNode.plainText;
         const continuesCommandMode = this.inputBuffer.startsWith('/');
-        if (startsCommandMode || continuesCommandMode) { this.syncCommandPalette(nextValue); }
+        if (continuesCommandMode) { this.syncCommandPalette(nextValue); }
         else { this.inputBuffer = nextValue; this.paletteManager.close(); }
       }
     }
